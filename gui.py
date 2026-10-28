@@ -549,6 +549,7 @@ class AdvisorWindow(Gtk.ApplicationWindow):
             exec_log, post_path = self._execute_and_verify(
                 win, geom or win, pre_path, actions, move["actions"],
                 move["advice"], off_x + nudge[0], off_y + nudge[1],
+                move.get("game", "chess"),
             )
             exec_log.insert(0, f"Window '{win['name']}' at screen ({off_x},{off_y})")
             # Show the post-move screenshot with the overlay kept on it
@@ -665,7 +666,7 @@ class AdvisorWindow(Gtk.ApplicationWindow):
             if actions:
                 self._last_move = {
                     "win": win, "actions": actions, "advice": advice,
-                    "move_text": move_text, "detection": detection,
+                    "move_text": move_text, "detection": detection, "game": game,
                 }
                 screen_actions = offset_actions(
                     actions, off_x + nudge[0], off_y + nudge[1]
@@ -697,7 +698,7 @@ class AdvisorWindow(Gtk.ApplicationWindow):
                 time.sleep(1.5)
                 exec_log, post_path = self._execute_and_verify(
                     win, geom or win, tmp_path, screen_actions, actions, advice,
-                    off_x + nudge[0], off_y + nudge[1],
+                    off_x + nudge[0], off_y + nudge[1], game,
                 )
                 # Show the post-move screenshot with the overlay kept on it
                 try:
@@ -770,12 +771,12 @@ class AdvisorWindow(Gtk.ApplicationWindow):
 
     def _execute_and_verify(self, win: dict, geom: dict, pre_path: str,
                             screen_actions: list, actions: list, advice: str,
-                            dx: int, dy: int) -> tuple[list[str], str]:
+                            dx: int, dy: int, game: str = "chess") -> tuple[list[str], str]:
         """
         Execute the move, then verify the board actually changed around the
-        move (before/after screenshot comparison). If it did not (e.g. the
-        app has no drag support), retry once with click-click. Returns
-        (exec_log, post_screenshot_path).
+        move (before/after screenshot comparison). For chess, if the drag did
+        not register, retry once with click-click. For Solitaire, always use
+        drag — never fall back to clicks. Returns (exec_log, post_screenshot_path).
         """
         log: list[str] = []
         # Raise the game window so the injected input reaches it — the
@@ -797,6 +798,12 @@ class AdvisorWindow(Gtk.ApplicationWindow):
 
         if move_changed_board(pre_path, post_path, actions, boxes):
             log.append("Move verified.")
+            return log, post_path
+
+        # Solitaire: drag is the only supported interaction — don't retry
+        # with clicks, just report the failure
+        if game == "solitaire":
+            log.append("Board unchanged — drag did not register (Solitaire uses drag only).")
             return log, post_path
 
         log.append("Board unchanged — retrying with click-click...")
