@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """
-Card Game Auto-Play — screenshot → AI → perform the best move.
+Card Game Auto-Play — screenshot → AI move → move_detector → perform.
 
-Takes a screenshot of your card game, asks Mistral Large 4 for the best
-move, parses the ACTION block from the response, and performs the move
-via X11 mouse input. Use --dry-run to preview without clicking.
+Two-step flow:
+  1. Screenshot → Mistral Large 4 → best move (text, e.g. "Nf3")
+  2. move_detector → resolve the move into source/destination pixel
+     coordinates → drag via X11 mouse input.
+
+Use --dry-run to preview without clicking.
 
 Usage:
     python3 auto_play.py --dry-run         # SAFE: show planned actions, no clicks
     python3 auto_play.py                  # Screenshot + AI plays one move
-    python3 auto_play.py --game "Poker"   # Specify the game
+    python3 auto_play.py --game "chess"  # Specify the game
     python3 auto_play.py --loop 10        # Play 10 moves in a row (with history)
     python3 auto_play.py --delay 2        # Wait 2s between moves (loop mode)
 """
@@ -23,15 +26,10 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from screenshot import take_screenshot, take_window_screenshot, X11WindowCapture
-from mistral_client import ask_best_move, image_size
-from move_parser import execute_actions, offset_actions, parse_move_actions
+from mistral_client import ask_best_move
+from move_parser import Action, execute_actions, extract_move_text
+from move_detector import detect_move
 from input_controller import X11Input
-
-
-def get_screen_size() -> tuple[int, int]:
-    """Get screen dimensions via X11."""
-    with X11Input() as inp:
-        return inp.screen_width, inp.screen_height
 
 
 def _window_offset(window_title: str) -> tuple[int, int]:
@@ -66,19 +64,21 @@ def play_one_move(
     dry_run: bool = False,
 ) -> dict:
     """
-    Take a screenshot, ask the AI for the best move, then perform it.
-
-    The AI response is parsed for an ACTION block (pixel coordinates) and
-    executed via X11 input injection, unless dry_run is set.
+    Two-step auto-play:
+      Step 1 — screenshot → AI → best move text (e.g. "Nf3").
+      Step 2 — move_detector → source/destination pixel coordinates →
+               drag via X11 input injection.
 
     history: list of previous moves for loop context.
     move_number: current move number (1-based) for history tracking.
     dry_run: show the planned actions without moving the mouse.
     """
-    # 1. Screenshot (with 5s delay so user can switch to the game window)
+    game = (game_hint or "chess").lower()
+
+    # ── Step 0: Screenshot (with 5s delay so user can switch windows) ──
     if verbose:
         target = f"window '{window_title}'" if window_title else "full screen"
-        print(f"[1/3] Switch to your game — capturing {target} in 5 seconds...")
+        print(f"[1/4] Switch to your game — capturing {target} in 5 seconds...")
         for i in range(5, 0, -1):
             print(f"      {i}...")
             time.sleep(1)
@@ -90,7 +90,6 @@ def play_one_move(
     else:
         image_path = take_screenshot(tmp_path)
 
-    # Debug: save a copy of the exact image sent to the API
     if debug:
         import shutil
         shutil.copy(image_path, '/tmp/api_image.png')
@@ -98,55 +97,79 @@ def play_one_move(
     if verbose:
         print(f"      Saved: {image_path}")
 
-    # 2. Screen size (for prompt context)
-    screen_w, screen_h = get_screen_size()
-    if verbose:
-        print(f"      Screen: {screen_w}x{screen_h}")
-
-    # 3. AI advice + executable actions
+    # ── Step 1: Ask the AI for the best move (text only, no coordinates) ──
     if verbose:
         history_note = f" ({len(history)} previous moves)" if history else ""
         mode_note = " [DRY RUN]" if dry_run else ""
-        print(f"[2/3] Asking Mistral for the best move{mode_note}{history_note}...")
+        print(f"[2/4] Asking Mistral for the best move{mode_note}{history_note}...")
     response = ask_best_move(
         api_key, image_path,
         game_hint=game_hint, history=history,
-        want_actions=True,
+        want_actions=False,
     )
 
-    # Print the advice
     if verbose:
         print(f"\n{'='*60}")
     print(response)
     if verbose:
         print(f"{'='*60}\n")
 
-    # 4. Parse actions (DRAG from CENTERS pixel centers, boxes fallback) and execute
-    img_w, img_h = image_size(image_path)
-    actions = parse_move_actions(response, img_w, img_h)
-    if actions and window_title:
+    # Extract the move from the response (last sentence)
+    move_text = extract_move_text(response, game=game)
+    if verbose:
+        print(f"[3/4] Extracted move: {move_text!r}")
+    if not move_text:
+        if verbose:
+            print("[4/4] No move extracted from AI response.")
+        return {
+            'response': response,
+            'move': '',
+            'actions': [],
+            'log': [],
+            'screenshot': tmp_path if save_screenshot else None,
+            'history_entry': f"Move {move_number}: (no move)",
+        }
+
+    # ── Step 2: Send the move to move_detector for pixel coordinates ──
+    if verbose:
+        print(f"[3/4] Detecting move '{move_text}' on the board...")
+    det = detect_move(api_key, image_path, move_text, game=game)
+    if verbose:
+        print(f"      {det.describe()}")
+
+    # ── Step 3: Build drag action and execute ──
+    actions: list[Action] = []
+    if det.source_point and det.dest_point:
+        sx, sy = det.source_point
+        dx, dy = det.dest_point
         # Window captures are window-relative — translate to screen coordinates
-        off_x, off_y = _window_offset(window_title)
-        actions = offset_actions(actions, off_x, off_y)
+        if window_title:
+            off_x, off_y = _window_offset(window_title)
+            sx += off_x
+            sy += off_y
+            dx += off_x
+            dy += off_y
+        actions.append(Action(
+            type='drag', x1=sx, y1=sy, x2=dx, y2=dy,
+            raw=f"move_detector: {det.from_square} -> {det.to_square} "
+                f"({sx},{sy}) -> ({dx},{dy})",
+        ))
 
     log: list[str] = []
     if actions:
         if not dry_run and window_title:
-            # Raise the game window so the injected input reaches it —
-            # another window (e.g. the terminal) may be overlapping it
             _raise_window(window_title)
         log = execute_actions(actions, dry_run=dry_run)
         if verbose:
             verb = "Dry run" if dry_run else "Executing"
-            print(f"[3/3] {verb} {len(actions)} action(s):")
+            print(f"[4/4] {verb} {len(actions)} action(s):")
             for line in log:
                 print(f"  {line}")
     elif verbose:
-        print("[3/3] No actions parsed from AI response.")
+        print("[4/4] No pixel coordinates from move_detector — cannot execute.")
 
-    # History entry: the move sentence (last line of the response)
-    last_line = response.strip().splitlines()[-1].strip() if response.strip() else ""
-    history_entry = f"Move {move_number}: {last_line[:100]}"
+    # History entry
+    history_entry = f"Move {move_number}: {move_text}"
 
     # Cleanup temp screenshot if not saving
     if not save_screenshot and os.path.exists(image_path):
@@ -157,6 +180,8 @@ def play_one_move(
 
     return {
         'response': response,
+        'move': move_text,
+        'detection': det.describe() if det else None,
         'actions': [a.describe() for a in actions],
         'log': log,
         'screenshot': tmp_path if save_screenshot else None,

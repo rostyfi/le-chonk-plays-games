@@ -290,6 +290,52 @@ def extract_move_description(response: str) -> str:
     return ""
 
 
+# Chess move patterns for extraction from natural-language advice.
+# Matches: e4, Nf3, exd5, O-O, O-O-O, e8=Q, Nbd7, R1e2, Bxf7+, Qh5#, etc.
+_CHESS_MOVE_RE = re.compile(
+    r'(?<![a-zA-Z0-9])'
+    r'(O-O-O|O-O|0-0-0|0-0|'
+    r'[NBRQK][a-h]?[1-8]?x?[a-h][1-8](?:=[NBRQ])?[+#]?|'
+    r'[a-h]x?[a-h]?[1-8](?:=[NBRQ])?[+#]?'
+    r')(?![a-zA-Z0-9])'
+)
+
+
+def extract_move_text(response: str, game: str = "chess") -> str:
+    """
+    Extract the move to play from the AI's advice response.
+
+    The AI's contract says the LAST sentence states the best move.
+    This function takes the last non-empty line and extracts the move
+    notation from it.
+
+    For chess: extracts algebraic notation (e.g. "Nf3", "e4", "exd5", "O-O").
+    For other games: returns the full last sentence (the move description).
+
+    Returns the extracted move string, or empty string if none found.
+    """
+    lines = [l.strip() for l in response.strip().splitlines() if l.strip()]
+    if not lines:
+        return ""
+    last = lines[-1]
+
+    if game == "chess":
+        # Try to find a chess move pattern in the last sentence
+        m = _CHESS_MOVE_RE.search(last)
+        if m:
+            return m.group(1)
+        # Fallback: if the last line looks like a bare move, use it
+        if _CHESS_MOVE_RE.fullmatch(last):
+            return last
+        # Last resort: search the whole response for a move pattern
+        m = _CHESS_MOVE_RE.search(response)
+        if m:
+            return m.group(1)
+        return last  # return the sentence as-is; move_detector can try
+
+    return last
+
+
 def parse_actions(response: str) -> list[Action]:
     """
     Parse all ACTION commands from the AI response.

@@ -26,9 +26,10 @@ from gi.repository import Gtk, Gdk, GdkPixbuf, GLib, Gio
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from screenshot import X11WindowCapture
-from mistral_client import ask_best_move, ensure_prompts_file, save_prompts, image_size
-from move_parser import (execute_actions, offset_actions, parse_move_actions,
-                        extract_boxes, drag_to_clicks)
+from mistral_client import ask_best_move, ensure_prompts_file, save_prompts
+from move_parser import (Action, execute_actions, offset_actions,
+                        extract_move_text, extract_boxes, drag_to_clicks)
+from move_detector import detect_move
 from overlay import draw_move_overlay, move_changed_board
 from input_controller import X11Input
 
@@ -45,7 +46,7 @@ class AdvisorWindow(Gtk.ApplicationWindow):
 
         self._prompts: list[dict] = []          # [{'title': str, 'text': str}, ...]
         self._active_prompt: str | None = None
-        self._last_move = None  # {'win', 'actions' (window-relative), 'advice'}
+        self._last_move = None  # {'win', 'actions', 'advice', 'move_text', 'detection'}
 
         self._build_ui()
         self._load_prompts()
@@ -429,8 +430,7 @@ class AdvisorWindow(Gtk.ApplicationWindow):
                     tempfile.gettempdir(),
                     f"card_advisor_gui_post_overlay_{int(time.time())}.png",
                 )
-                draw_move_overlay(post_path, post_overlay, move["actions"],
-                                  extract_boxes(move["advice"]))
+                draw_move_overlay(post_path, post_overlay, move["actions"], None)
                 GLib.idle_add(self._show_screenshot, post_overlay)
             except Exception:
                 GLib.idle_add(self._show_screenshot, post_path)
@@ -462,9 +462,12 @@ class AdvisorWindow(Gtk.ApplicationWindow):
     def _worker(self, win: dict, prompt_text: str, mode: str,
                 nudge: tuple[int, int] = (0, 0)):
         """
-        Background thread: capture screenshot, call API, update UI.
+        Background thread: two-step auto-play flow.
+        Step 1 — capture screenshot → AI → best move text (e.g. "Nf3").
+        Step 2 — move_detector → source/destination pixel coordinates →
+                 drag via X11 input.
         mode: 'advise' (advice only), 'dry_run' (plan, no clicks),
-              'execute' (parse the ACTION block and perform the move).
+              'execute' (perform the move).
         nudge: (dx, dy) screen-pixel correction applied to every move.
         """
         try:
@@ -486,26 +489,39 @@ class AdvisorWindow(Gtk.ApplicationWindow):
             # 2. Show screenshot preview
             GLib.idle_add(self._show_screenshot, tmp_path)
 
-            # 3. Call Mistral API with the selected prompt
-            want_actions = mode in ("dry_run", "execute")
+            # 3. Step 1 — Call Mistral API for the best move (text only)
             advice = ask_best_move(
                 self.api_key, tmp_path,
-                game_hint="Klondike Solitaire",
-                want_actions=want_actions,
+                game_hint="chess",
+                want_actions=False,
                 prompt=prompt_text,
             )
 
-            # 4. Parse planned actions. Keep them window-relative for storage
-            #    (re-execution re-translates with a fresh window position), and
-            #    make a screen-coordinate copy for display/execution.
-            #    The DRAG endpoints come from the CENTERS section (exact
-            #    pixel centers), falling back to bounding boxes.
-            actions = []
-            if want_actions:
-                img_w, img_h = image_size(tmp_path)
-                actions = parse_move_actions(advice, img_w, img_h)
+            # 4. Extract the move and detect pixel coordinates
+            move_text = extract_move_text(advice, game="chess")
+            GLib.idle_add(
+                self.status_label.set_label,
+                f"Move: {move_text!r} — detecting on board...",
+            )
+
+            actions: list[Action] = []
+            detection = None
+            if move_text and mode in ("dry_run", "execute"):
+                det = detect_move(self.api_key, tmp_path, move_text, game="chess")
+                detection = det.describe()
+                if det.source_point and det.dest_point:
+                    sx, sy = det.source_point
+                    dy_px, dx_px = det.dest_point
+                    actions.append(Action(
+                        type='drag', x1=sx, y1=sy, x2=dx_px, y2=dy_px,
+                        raw=f"move_detector: {det.from_square} -> {det.to_square}",
+                    ))
+
             if actions:
-                self._last_move = {"win": win, "actions": actions, "advice": advice}
+                self._last_move = {
+                    "win": win, "actions": actions, "advice": advice,
+                    "move_text": move_text, "detection": detection,
+                }
                 screen_actions = offset_actions(
                     actions, off_x + nudge[0], off_y + nudge[1]
                 )
@@ -519,8 +535,7 @@ class AdvisorWindow(Gtk.ApplicationWindow):
                         tempfile.gettempdir(),
                         f"card_advisor_gui_overlay_{int(time.time())}.png",
                     )
-                    draw_move_overlay(tmp_path, overlay_path, actions,
-                                      extract_boxes(advice))
+                    draw_move_overlay(tmp_path, overlay_path, actions, None)
                     GLib.idle_add(self._show_screenshot, overlay_path)
                 except Exception:
                     pass
@@ -545,8 +560,7 @@ class AdvisorWindow(Gtk.ApplicationWindow):
                         tempfile.gettempdir(),
                         f"card_advisor_gui_post_overlay_{int(time.time())}.png",
                     )
-                    draw_move_overlay(post_path, post_overlay, actions,
-                                      extract_boxes(advice))
+                    draw_move_overlay(post_path, post_overlay, actions, None)
                     GLib.idle_add(self._show_screenshot, post_overlay)
                 except Exception:
                     GLib.idle_add(self._show_screenshot, post_path)
