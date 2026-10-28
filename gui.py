@@ -138,6 +138,18 @@ class AdvisorWindow(Gtk.ApplicationWindow):
         nudge_reset.connect("clicked", self._on_nudge_reset)
         nudge_bar.append(nudge_reset)
 
+        # ── Reasoning level: None / Max ──
+        nudge_bar.append(Gtk.Label(label="  Reasoning:"))
+        self.reasoning_model = Gio.ListStore(item_type=Gtk.StringObject)
+        self.reasoning_model.append(Gtk.StringObject.new("None (fast)"))
+        self.reasoning_model.append(Gtk.StringObject.new("Max (think)"))
+        self.reasoning_dropdown = Gtk.DropDown(model=self.reasoning_model)
+        self.reasoning_dropdown.set_selected(0)
+        self.reasoning_dropdown.set_tooltip_text(
+            "AI reasoning level for move advice: None = fast, Max = extended thinking"
+        )
+        nudge_bar.append(self.reasoning_dropdown)
+
         # ── Prompt bar: switch / create / save prompts ──
         prompt_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         main_box.append(prompt_bar)
@@ -347,6 +359,11 @@ class AdvisorWindow(Gtk.ApplicationWindow):
         return (self.nudge_x_spin.get_value_as_int(),
                 self.nudge_y_spin.get_value_as_int())
 
+    def _current_reasoning(self) -> str:
+        """Return 'none' or 'max' based on the reasoning dropdown selection."""
+        idx = self.reasoning_dropdown.get_selected()
+        return "max" if idx == 1 else "none"
+
     def _detect_game(self) -> str:
         """Detect the game from the active prompt title.
 
@@ -398,7 +415,8 @@ class AdvisorWindow(Gtk.ApplicationWindow):
         # Run capture + API call in a background thread
         thread = threading.Thread(
             target=self._worker,
-            args=(win, prompt_text, mode, self._current_nudge()),
+            args=(win, prompt_text, mode, self._current_nudge(),
+                  self._current_reasoning()),
             daemon=True,
         )
         thread.start()
@@ -450,7 +468,8 @@ class AdvisorWindow(Gtk.ApplicationWindow):
 
         thread = threading.Thread(
             target=self._play_loop_worker,
-            args=(win, prompt_text, self._current_nudge()),
+            args=(win, prompt_text, self._current_nudge(),
+                  self._current_reasoning()),
             daemon=True,
         )
         thread.start()
@@ -463,7 +482,8 @@ class AdvisorWindow(Gtk.ApplicationWindow):
         self.stop_btn.set_sensitive(False)
 
     def _play_loop_worker(self, win: dict, prompt_text: str,
-                          nudge: tuple[int, int] = (0, 0)):
+                          nudge: tuple[int, int] = (0, 0),
+                          reasoning: str = "none"):
         """Auto-play loop: capture → AI → detect → execute → wait 5s → repeat.
 
         Runs until _stop_requested is set or an error occurs.
@@ -477,7 +497,7 @@ class AdvisorWindow(Gtk.ApplicationWindow):
                     f"Move #{move_count} — capturing '{win['name']}'...",
                 )
                 try:
-                    self._worker(win, prompt_text, "execute", nudge)
+                    self._worker(win, prompt_text, "execute", nudge, reasoning)
                 except Exception as e:
                     GLib.idle_add(self._show_error, f"Move #{move_count} error: {e}")
                     break
@@ -567,7 +587,8 @@ class AdvisorWindow(Gtk.ApplicationWindow):
         return GLib.SOURCE_REMOVE
 
     def _worker(self, win: dict, prompt_text: str, mode: str,
-                nudge: tuple[int, int] = (0, 0)):
+                nudge: tuple[int, int] = (0, 0),
+                reasoning: str = "none"):
         """
         Background thread: two-step auto-play flow.
         Step 1 — capture screenshot → AI → best move text (e.g. "Nf3").
@@ -602,6 +623,7 @@ class AdvisorWindow(Gtk.ApplicationWindow):
                 self.api_key, tmp_path,
                 game=game,
                 prompt=prompt_text,
+                reasoning=reasoning,
             )
 
             # 4. Detect pixel coordinates for the move

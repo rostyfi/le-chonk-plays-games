@@ -62,6 +62,7 @@ def play_one_move(
     move_number: int = 1,
     debug: bool = False,
     dry_run: bool = False,
+    reasoning: str = "none",
 ) -> dict:
     """
     Two-step auto-play:
@@ -105,6 +106,7 @@ def play_one_move(
     response, move_text = ask_best_move_parsed(
         api_key, image_path,
         game=game, game_hint=game_hint, history=history,
+        reasoning=reasoning,
     )
 
     if verbose:
@@ -249,6 +251,13 @@ def main():
         action='store_true',
         help='Minimal output'
     )
+    parser.add_argument(
+        '--reasoning', '-r',
+        choices=['none', 'max'],
+        default='none',
+        help='AI reasoning level for move advice: none (fast) or max (think) '
+             '(default: none)'
+    )
 
     args = parser.parse_args()
 
@@ -281,11 +290,12 @@ def main():
                 window_title=args.window,
                 save_screenshot=save_path,
                 verbose=verbose,
-                
+
                 history=move_history if args.loop > 1 else None,
                 move_number=move_num,
                 debug=args.debug,
                 dry_run=args.dry_run,
+                reasoning=args.reasoning,
             )
 
             # Record this move in history for the next iteration

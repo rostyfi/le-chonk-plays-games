@@ -90,8 +90,13 @@ def image_size(image_path: str) -> tuple[int | None, int | None]:
         return None, None
 
 
-def _call_api(api_key: str, image_path: str, user_prompt: str, model: str) -> str:
-    """Send image + prompt to Mistral API. Returns response text."""
+def _call_api(api_key: str, image_path: str, user_prompt: str, model: str,
+              reasoning: str = "none") -> str:
+    """Send image + prompt to Mistral API. Returns response text.
+
+    reasoning: "none" (fast, no chain-of-thought) or "max" (extended
+    reasoning, higher token budget).
+    """
     image_b64, mime_type = encode_image(image_path)
 
     # Debug: log image info
@@ -104,6 +109,7 @@ def _call_api(api_key: str, image_path: str, user_prompt: str, model: str) -> st
         dims = "?"
     print(f"  Image: {dims}, ~{img_kb}KB, {mime_type}", file=sys.stderr)
 
+    is_max = reasoning == "max"
     payload = {
         "model": model,
         "messages": [{
@@ -114,10 +120,10 @@ def _call_api(api_key: str, image_path: str, user_prompt: str, model: str) -> st
                  "image_url": {"url": f"data:{mime_type};base64,{image_b64}"}},
             ],
         }],
-        "max_tokens": 32768,
+        "max_tokens": 32768 if is_max else 4096,
         "temperature": 0,
         "top_p": 1,
-        "reasoning_effort": "high",
+        "reasoning_effort": "high" if is_max else "none",
     }
 
     req = urllib.request.Request(
@@ -187,6 +193,7 @@ def ask_best_move(
     game_hint: str = None,
     history: list[str] = None,
     prompt: str = None,
+    reasoning: str = "none",
 ) -> str:
     """
     Send a game screenshot to Mistral Large 4 and get the best move advice.
@@ -196,6 +203,7 @@ def ask_best_move(
         If None, a game-appropriate default is chosen: CHESS_PROMPT when
         game_hint indicates chess, otherwise BASE_PROMPT (Solitaire).
     game_hint: used to select the default prompt when prompt is None.
+    reasoning: "none" (fast) or "max" (extended chain-of-thought).
     """
     if prompt is not None:
         text = prompt
@@ -207,8 +215,8 @@ def ask_best_move(
     if history:
         text = "Previous moves:\n" + "\n".join(f"  {h}" for h in history) + "\n\n" + text
 
-    print(f"Trying {MODEL}...", file=sys.stderr)
-    return _call_api(api_key, image_path, text, MODEL)
+    print(f"Trying {MODEL} (reasoning={reasoning})...", file=sys.stderr)
+    return _call_api(api_key, image_path, text, MODEL, reasoning=reasoning)
 
 
 def ask_best_move_parsed(
@@ -218,6 +226,7 @@ def ask_best_move_parsed(
     game_hint: str = None,
     history: list[str] = None,
     prompt: str = None,
+    reasoning: str = "none",
 ) -> tuple[str, str]:
     """
     Ask Mistral for the best move and extract the move text from the response.
@@ -225,12 +234,15 @@ def ask_best_move_parsed(
     Combines ask_best_move() with move_parser.extract_move_text() so callers
     get both the raw AI response and the parsed move (e.g. "Nf3") in one call.
 
+    reasoning: "none" (fast) or "max" (extended chain-of-thought).
+
     Returns (raw_response, move_text). move_text is empty string if no move
     could be extracted.
     """
     response = ask_best_move(
         api_key, image_path,
         game_hint=game_hint or game, history=history, prompt=prompt,
+        reasoning=reasoning,
     )
     move_text = extract_move_text(response, game=game)
     return response, move_text
