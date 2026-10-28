@@ -43,6 +43,8 @@ class AdvisorWindow(Gtk.ApplicationWindow):
         self._capture = None  # X11WindowCapture instance
         self._windows = []    # list of window dicts
         self._busy = False
+        self._playing = False       # auto-play loop is running
+        self._stop_requested = False  # signal to stop the auto-play loop
 
         self._prompts: list[dict] = []          # [{'title': str, 'text': str}, ...]
         self._active_prompt: str | None = None
@@ -99,6 +101,18 @@ class AdvisorWindow(Gtk.ApplicationWindow):
         self.reexecute_btn.connect("clicked", self._on_reexecute)
         self.reexecute_btn.set_tooltip_text("No move received yet")
         btn_bar.append(self.reexecute_btn)
+
+        self.play_btn = Gtk.Button(label="Play")
+        self.play_btn.connect("clicked", self._on_play)
+        self.play_btn.get_style_context().add_class("suggested-action")
+        self.play_btn.set_tooltip_text("Auto-play in a loop (5s between moves)")
+        btn_bar.append(self.play_btn)
+
+        self.stop_btn = Gtk.Button(label="Stop")
+        self.stop_btn.connect("clicked", self._on_stop)
+        self.stop_btn.get_style_context().add_class("destructive-action")
+        self.stop_btn.set_sensitive(False)
+        btn_bar.append(self.stop_btn)
 
         # ── Nudge: fine aim correction applied to every executed move ──
         nudge_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -365,7 +379,7 @@ class AdvisorWindow(Gtk.ApplicationWindow):
         win = self._windows[idx]
         self._busy = True
         for btn in (self.capture_btn, self.dry_run_btn, self.execute_btn,
-                    self.reexecute_btn):
+                    self.reexecute_btn, self.play_btn):
             btn.set_sensitive(False)
         mode_label = {"advise": "advice", "dry_run": "dry run", "execute": "move"}[mode]
         self.status_label.set_label(f"Capturing '{win['name']}' ({mode_label})...")
@@ -388,7 +402,7 @@ class AdvisorWindow(Gtk.ApplicationWindow):
             return
         self._busy = True
         for btn in (self.capture_btn, self.dry_run_btn, self.execute_btn,
-                    self.reexecute_btn):
+                    self.reexecute_btn, self.play_btn):
             btn.set_sensitive(False)
         self.status_label.set_label("Re-executing last move...")
         thread = threading.Thread(
@@ -396,6 +410,88 @@ class AdvisorWindow(Gtk.ApplicationWindow):
             daemon=True,
         )
         thread.start()
+
+    # ── Play / Stop (auto-play loop) ──
+
+    def _on_play(self, *_args):
+        if self._busy or self._playing:
+            return
+
+        idx = self.window_dropdown.get_selected()
+        if idx == Gtk.INVALID_LIST_POSITION or idx >= len(self._windows):
+            self.status_label.set_label("Please select a window first.")
+            return
+
+        prompt_text = self._current_prompt_text()
+        if not prompt_text.strip():
+            self.status_label.set_label("Prompt is empty — write a prompt first.")
+            return
+
+        win = self._windows[idx]
+        self._playing = True
+        self._stop_requested = False
+        self._busy = True
+        for btn in (self.capture_btn, self.dry_run_btn, self.execute_btn,
+                    self.reexecute_btn, self.play_btn):
+            btn.set_sensitive(False)
+        self.stop_btn.set_sensitive(True)
+        self.status_label.set_label(f"Auto-playing '{win['name']}' — press Stop to halt.")
+
+        thread = threading.Thread(
+            target=self._play_loop_worker,
+            args=(win, prompt_text, self._current_nudge()),
+            daemon=True,
+        )
+        thread.start()
+
+    def _on_stop(self, *_args):
+        if not self._playing:
+            return
+        self._stop_requested = True
+        self.status_label.set_label("Stopping after the current move...")
+        self.stop_btn.set_sensitive(False)
+
+    def _play_loop_worker(self, win: dict, prompt_text: str,
+                          nudge: tuple[int, int] = (0, 0)):
+        """Auto-play loop: capture → AI → detect → execute → wait 5s → repeat.
+
+        Runs until _stop_requested is set or an error occurs.
+        """
+        move_count = 0
+        try:
+            while not self._stop_requested:
+                move_count += 1
+                GLib.idle_add(
+                    self.status_label.set_label,
+                    f"Move #{move_count} — capturing '{win['name']}'...",
+                )
+                try:
+                    self._worker(win, prompt_text, "execute", nudge)
+                except Exception as e:
+                    GLib.idle_add(self._show_error, f"Move #{move_count} error: {e}")
+                    break
+
+                if self._stop_requested:
+                    break
+
+                # Wait 5 seconds, checking for stop every 0.5s
+                GLib.idle_add(
+                    self.status_label.set_label,
+                    f"Move #{move_count} done. Next move in 5s... (press Stop to halt)",
+                )
+                for _ in range(10):
+                    if self._stop_requested:
+                        break
+                    time.sleep(0.5)
+
+            GLib.idle_add(
+                self.status_label.set_label,
+                f"Auto-play stopped after {move_count} move(s).",
+            )
+        finally:
+            self._playing = False
+            self._stop_requested = False
+            GLib.idle_add(self._set_idle)
 
     def _reexecute_worker(self, nudge: tuple[int, int] = (0, 0)):
         """Re-run the last received move — no new screenshot, no API call."""
@@ -592,13 +688,19 @@ class AdvisorWindow(Gtk.ApplicationWindow):
         except Exception as e:
             GLib.idle_add(self._show_error, str(e))
         finally:
-            GLib.idle_add(self._set_idle)
+            # Don't reset UI state when running inside the auto-play loop —
+            # the loop worker manages button/idle state itself.
+            if not self._playing:
+                GLib.idle_add(self._set_idle)
 
     def _set_idle(self):
         self._busy = False
+        self._playing = False
+        self._stop_requested = False
         for btn in (self.capture_btn, self.dry_run_btn, self.execute_btn,
-                    self.reexecute_btn):
+                    self.reexecute_btn, self.play_btn):
             btn.set_sensitive(True)
+        self.stop_btn.set_sensitive(False)
         return GLib.SOURCE_REMOVE
 
     def _capture_window_image(self, win: dict) -> str:
