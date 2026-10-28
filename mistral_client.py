@@ -61,6 +61,26 @@ CHESS_PROMPT = (
     "Do NOT report pixel coordinates or bounding boxes."
 )
 
+CHECKERS_PROMPT = (
+    "This is a game of CHECKERS (English draughts). "
+    "Think carefully about the position, then respond with EXACTLY ONE LINE "
+    "starting with 'MOVE: ' followed by a short description of the single "
+    "best legal move. No analysis in the output — just the MOVE: line. "
+    "Checkers rules: "
+    "Pieces move diagonally forward one square to an empty dark square. "
+    "Regular pieces capture by jumping diagonally over an adjacent opponent "
+    "piece to an empty square beyond it. Kings move and capture diagonally "
+    "both forward and backward. If a capture is available, you MUST capture. "
+    "If multiple captures are available, choose the one that captures the "
+    "most pieces. A regular piece reaching the opposite end is promoted to "
+    "a King. "
+    "Describe moves using square coordinates (file a-h + rank 1-8, e.g. 'c3', 'd4'). "
+    "Examples: 'MOVE: Move c3 to d4', 'MOVE: Capture e5 over d4 to c3', "
+    "'MOVE: Move king f6 to e5', 'MOVE: No moves available'. "
+    "Never suggest an illegal move. "
+    "Do NOT report pixel coordinates or bounding boxes."
+)
+
 def encode_image(image_path: str) -> tuple[str, str]:
     """Encode image to base64. Returns (base64, mime_type)."""
     with open(image_path, 'rb') as f:
@@ -219,6 +239,8 @@ def ask_best_move(
         text = prompt
     elif game_hint and "chess" in game_hint.lower():
         text = CHESS_PROMPT
+    elif game_hint and ("checkers" in game_hint.lower() or "draughts" in game_hint.lower()):
+        text = CHECKERS_PROMPT
     else:
         text = BASE_PROMPT
     text += ADVICE_SUFFIX
@@ -265,6 +287,7 @@ def default_prompts() -> list[dict]:
     return [
         {"title": "Klondike Solitaire (default)", "text": BASE_PROMPT},
         {"title": "Chess (default)", "text": CHESS_PROMPT},
+        {"title": "Checkers (default)", "text": CHECKERS_PROMPT},
     ]
 
 

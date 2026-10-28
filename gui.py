@@ -367,10 +367,13 @@ class AdvisorWindow(Gtk.ApplicationWindow):
     def _detect_game(self) -> str:
         """Detect the game from the active prompt title.
 
-        Returns 'chess' if the prompt title contains 'chess', 'solitaire'
-        if it contains 'solitaire' or 'klondike', otherwise 'chess' (default).
+        Returns 'checkers' if the title contains 'checkers' or 'draughts',
+        'solitaire' if it contains 'solitaire' or 'klondike',
+        otherwise 'chess' (default).
         """
         title = (self._active_prompt or "").lower()
+        if "checkers" in title or "draughts" in title:
+            return "checkers"
         if "solitaire" in title or "klondike" in title:
             return "solitaire"
         return "chess"

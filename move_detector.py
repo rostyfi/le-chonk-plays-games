@@ -87,10 +87,14 @@ def build_system_prompt(game: str = "chess") -> str:
     dictionaries and must not ramble about coordinate math.
 
     Game-specific: chess asks for algebraic squares + legality; solitaire
-    asks for card/pile descriptions in natural language.
+    asks for card/pile descriptions in natural language; checkers asks for
+    square coordinates like chess but without chess-specific legality.
     """
-    if "solitaire" in game.lower() or "klondike" in game.lower():
+    g = game.lower()
+    if "solitaire" in g or "klondike" in g:
         return _build_solitaire_system_prompt(game)
+    if "checkers" in g or "draughts" in g:
+        return _build_checkers_system_prompt(game)
     return _build_chess_system_prompt(game)
 
 
@@ -171,13 +175,48 @@ def _build_solitaire_system_prompt(game: str) -> str:
     )
 
 
+def _build_checkers_system_prompt(game: str) -> str:
+    """Checkers system prompt: locate source/destination squares, report
+    bounding boxes + from/to squares. Like chess but without chess legality."""
+    return (
+        "You are an object-detection vision model for a board-game-playing "
+        f"agent. The game is {game} (Checkers / English draughts). "
+        "Objective: given a screenshot and a move, locate the two squares "
+        "involved in that move — the SOURCE square (the piece being moved) "
+        "and the DESTINATION square (where it is moved to). For captures, "
+        "the destination is the empty square the piece lands on after jumping. "
+        "Task — box_2d only: report the bounding box of each square as 4 "
+        "coordinates [xmin, ymin, xmax, ymax], normalized 0-999 (0 = left/top "
+        "edge of the image, 999 = right/bottom edge), in the WHOLE image. "
+        "Bracket each square tightly — only the playable dark squares, "
+        "not the light squares. "
+        "Do NOT reason step-by-step about coordinates and do NOT write a "
+        "long analysis. You MUST end your reply with exactly two "
+        "dictionaries (one per line) followed by two square lines, in this "
+        "exact format: "
+        '{"box_2d": [xmin, ymin, xmax, ymax], "label": "source"} '
+        '{"box_2d": [xmin, ymin, xmax, ymax], "label": "destination"} '
+        "from: <square> "
+        "to: <square> "
+        "Squares use algebraic notation (file a-h + rank 1-8, e.g. c3, d4). "
+        "Example for the checkers move 'c3 to d4': "
+        '{"box_2d": [531, 687, 594, 750], "label": "source"} '
+        '{"box_2d": [594, 624, 657, 687], "label": "destination"} '
+        "from: c3 "
+        "to: d4 "
+        "If the move cannot be located on the board, output 'BOXES: NONE' "
+        "and 'SQUARES: NONE'."
+    )
+
+
 def build_user_prompt(move: str, game: str = "chess",
                       img_w: Optional[int] = None,
                       img_h: Optional[int] = None) -> str:
     """User prompt: the specific move to detect on the attached screenshot."""
     size = (f" The screenshot is {img_w}x{img_h} pixels."
             if img_w and img_h else "")
-    if "solitaire" in game.lower() or "klondike" in game.lower():
+    g = game.lower()
+    if "solitaire" in g or "klondike" in g:
         return (
             f"The image shows a game of {game}.{size} "
             f'The player wants to play: "{move}". '
@@ -185,6 +224,16 @@ def build_user_prompt(move: str, game: str = "chess",
             f"and the destination object (where it goes). Report their "
             f"bounding boxes (labels 'source' and 'destination') and a "
             f"short description of the move."
+        )
+    if "checkers" in g or "draughts" in g:
+        return (
+            f"The image shows a game of {game}.{size} "
+            f'The player wants to play: "{move}". '
+            f"Detect the source square (the piece being moved) and the "
+            f"destination square (where it lands). For captures, the "
+            f"destination is the empty square beyond the captured piece. "
+            f"Report their bounding boxes (labels 'source' and 'destination') "
+            f"and the from/to squares."
         )
     return (
         f"The image shows a game of {game}.{size} "
@@ -453,9 +502,9 @@ def parse_detection(raw: str, move: str, game: str,
                     img_w: Optional[int], img_h: Optional[int]) -> DetectedMove:
     """Parse a model reply into a DetectedMove."""
     boxes = extract_boxes(raw)
-    is_chess = game == "chess"
-    squares = extract_squares(raw) if is_chess else None
-    description = None if is_chess else extract_description(raw)
+    is_board_game = game in ("chess", "checkers", "draughts")
+    squares = extract_squares(raw) if is_board_game else None
+    description = None if is_board_game else extract_description(raw)
     source_box = boxes['source'] if boxes else None
     dest_box = boxes['dest'] if boxes else None
     source_point = dest_point = None
