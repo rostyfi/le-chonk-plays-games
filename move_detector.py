@@ -26,8 +26,8 @@ Output format (per the cookbook): {"box_2d": [xmin, ymin, xmax, ymax],
 "label": string}, coordinates normalized 0-999 (0 = left/top edge of the
 image, 999 = right/bottom edge).
 
-This module is self-contained: it does NOT import mistral_client,
-move_parser or overlay. It talks to the Mistral HTTP endpoint with the
+Prompts are loaded from prompts.json via prompt_loader (shared with
+mistral_client and gui). The Mistral HTTP endpoint is called with the
 standard library (urllib) only, so it has no third-party dependency. PIL is
 used to read the image size and to draw the move overlay; it is optional for
 detection (required only when drawing).
@@ -57,6 +57,9 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Optional
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from prompt_loader import get_detector_system_prompt, build_detector_user_prompt
+
 MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
 MODEL = "mistral-large-4"
 
@@ -76,215 +79,19 @@ _RESULT_DICT = re.compile(
 _SQUARE = r'[a-hA-H][1-8]'
 
 
-# ── System prompt (cookbook "Recommended Usage": objective + task + format) ──
+# ── Prompts (loaded from prompts.json via prompt_loader) ────────────
 
 def build_system_prompt(game: str = "chess") -> str:
-    """System prompt: detection objective + box_2d task + strict format.
-
-    Follows the cookbook's recommended system prompt (objective, the box_2d
-    task, a response format with a concrete example, free generation) but is
-    deliberately forceful: the model must END with the two standardized
-    dictionaries and must not ramble about coordinate math.
-
-    Game-specific: chess asks for algebraic squares + legality; solitaire
-    asks for card/pile descriptions in natural language; checkers asks for
-    square coordinates like chess but without chess-specific legality.
-    """
-    g = game.lower()
-    if "solitaire" in g or "klondike" in g:
-        return _build_solitaire_system_prompt(game)
-    if "checkers" in g or "draughts" in g:
-        return _build_checkers_system_prompt(game)
-    if "minesweeper" in g:
-        return _build_minesweeper_system_prompt(game)
-    return _build_chess_system_prompt(game)
-
-
-def _build_chess_system_prompt(game: str) -> str:
-    """Chess system prompt: locate source/destination squares, report
-    bounding boxes + algebraic from/to squares."""
-    return (
-        "You are an object-detection vision model for a board-game-playing "
-        f"agent. The game is {game}. "
-        "Objective: given a screenshot and a move, locate the two squares "
-        "involved in that move — the SOURCE square (the piece being moved) "
-        "and the DESTINATION square (where it is moved to). "
-        "Task — box_2d only: report the bounding box of each square as 4 "
-        "coordinates [xmin, ymin, xmax, ymax], normalized 0-999 (0 = left/top "
-        "edge of the image, 999 = right/bottom edge), in the WHOLE image. "
-        "Bracket each square tightly. "
-        "Do NOT reason step-by-step about coordinates and do NOT write a "
-        "long analysis. You MUST end your reply with exactly two "
-        "dictionaries (one per line) followed by two square lines, in this "
-        "exact format: "
-        '{"box_2d": [xmin, ymin, xmax, ymax], "label": "source"} '
-        '{"box_2d": [xmin, ymin, xmax, ymax], "label": "destination"} '
-        "from: <square> "
-        "to: <square> "
-        "Squares use algebraic notation (chess: file a-h + rank 1-8, e.g. "
-        "e2). Example for the chess move \"e4\": "
-        '{"box_2d": [531, 687, 594, 750], "label": "source"} '
-        '{"box_2d": [531, 500, 594, 563], "label": "destination"} '
-        "from: e2 "
-        "to: e4 "
-        "The move notation may give only the piece type and the destination "
-        "(e.g. \"Nf3\" gives no source square, and several knights may exist). "
-        "In that case READ THE BOARD: find every piece of that type, and "
-        "determine which one can LEGALLY move to the destination square (a "
-        "knight moves in an L: 2 squares one way + 1 square perpendicular; a "
-        "pawn moves forward; a bishop diagonally; etc.). That piece's square "
-        "is the SOURCE. Always check that source -> destination is a legal "
-        "move for that piece before reporting — do NOT guess and do NOT "
-        "default to a square. "
-        "If the move cannot be located on the board, output 'BOXES: NONE' "
-        "and 'SQUARES: NONE'."
-    )
-
-
-def _build_solitaire_system_prompt(game: str) -> str:
-    """Solitaire system prompt: locate source card and destination pile,
-    report bounding boxes + natural-language description."""
-    return (
-        "You are an object-detection vision model for a card-game-playing "
-        f"agent. The game is {game} (Klondike Solitaire). "
-        "Objective: given a screenshot and a move described in natural "
-        "language (e.g. 'Move the 7 of diamonds from tableau column 3 "
-        "to tableau column 5', 'Draw from the stock pile', 'Move the "
-        "King of spades to an empty column'), locate the two objects "
-        "involved in that move — the SOURCE (the card or pile being "
-        "interacted with) and the DESTINATION (where it goes). "
-        "Task — box_2d only: report the bounding box of each object as 4 "
-        "coordinates [xmin, ymin, xmax, ymax], normalized 0-999 (0 = left/top "
-        "edge of the image, 999 = right/bottom edge), in the WHOLE image. "
-        "Bracket each object tightly: the 'source' box brackets the card "
-        "being moved (or the stock pile if drawing); the 'destination' box "
-        "brackets the destination pile's top card (or the empty column "
-        "placeholder). "
-        "Do NOT reason step-by-step about coordinates and do NOT write a "
-        "long analysis. You MUST end your reply with exactly two "
-        "dictionaries (one per line) followed by a description line, in "
-        "this exact format: "
-        '{"box_2d": [xmin, ymin, xmax, ymax], "label": "source"} '
-        '{"box_2d": [xmin, ymin, xmax, ymax], "label": "destination"} '
-        "move: <short description> "
-        "Example for 'Move the 7♦ from column 3 to column 5': "
-        '{"box_2d": [421, 607, 458, 661], "label": "source"} '
-        '{"box_2d": [621, 496, 658, 550], "label": "destination"} '
-        "move: 7♦ column 3 -> column 5 "
-        "If the move is a single click (e.g. 'Draw from the stock pile'), "
-        "use the same box for both source and destination (the stock pile). "
-        "If the move cannot be located on the board, output 'BOXES: NONE'."
-    )
-
-
-def _build_checkers_system_prompt(game: str) -> str:
-    """Checkers system prompt: locate source/destination squares, report
-    bounding boxes + from/to squares. Like chess but without chess legality."""
-    return (
-        "You are an object-detection vision model for a board-game-playing "
-        f"agent. The game is {game} (Checkers / English draughts). "
-        "Objective: given a screenshot and a move, locate the two squares "
-        "involved in that move — the SOURCE square (the piece being moved) "
-        "and the DESTINATION square (where it is moved to). For captures, "
-        "the destination is the empty square the piece lands on after jumping. "
-        "Task — box_2d only: report the bounding box of each square as 4 "
-        "coordinates [xmin, ymin, xmax, ymax], normalized 0-999 (0 = left/top "
-        "edge of the image, 999 = right/bottom edge), in the WHOLE image. "
-        "Bracket each square tightly — only the playable dark squares, "
-        "not the light squares. "
-        "Do NOT reason step-by-step about coordinates and do NOT write a "
-        "long analysis. You MUST end your reply with exactly two "
-        "dictionaries (one per line) followed by two square lines, in this "
-        "exact format: "
-        '{"box_2d": [xmin, ymin, xmax, ymax], "label": "source"} '
-        '{"box_2d": [xmin, ymin, xmax, ymax], "label": "destination"} '
-        "from: <square> "
-        "to: <square> "
-        "Squares use algebraic notation (file a-h + rank 1-8, e.g. c3, d4). "
-        "Example for the checkers move 'c3 to d4': "
-        '{"box_2d": [531, 687, 594, 750], "label": "source"} '
-        '{"box_2d": [594, 624, 657, 687], "label": "destination"} '
-        "from: c3 "
-        "to: d4 "
-        "If the move cannot be located on the board, output 'BOXES: NONE' "
-        "and 'SQUARES: NONE'."
-    )
-
-
-def _build_minesweeper_system_prompt(game: str) -> str:
-    """Minesweeper system prompt: locate a single cell, report its bounding box.
-    Source and destination are the same box (single click)."""
-    return (
-        "You are an object-detection vision model for a game-playing agent. "
-        f"The game is {game} (Minesweeper). "
-        "Objective: given a screenshot and an action (e.g. 'Reveal cell col 3 "
-        "row 5' or 'Flag cell col 7 row 2'), locate the single CELL on the "
-        "grid that should be clicked. "
-        "Task — box_2d only: report the bounding box of that cell as 4 "
-        "coordinates [xmin, ymin, xmax, ymax], normalized 0-999 (0 = left/top "
-        "edge of the image, 999 = right/bottom edge), in the WHOLE image. "
-        "Bracket the cell tightly — just the cell, not the surrounding UI. "
-        "Since this is a single click (not a drag), use the SAME box for both "
-        "source and destination. "
-        "Do NOT reason step-by-step about coordinates and do NOT write a "
-        "long analysis. You MUST end your reply with exactly two "
-        "dictionaries (identical, one per line) followed by a description line, "
-        "in this exact format: "
-        '{"box_2d": [xmin, ymin, xmax, ymax], "label": "source"} '
-        '{"box_2d": [xmin, ymin, xmax, ymax], "label": "destination"} '
-        "move: <short description> "
-        "Example for 'Reveal cell col 3 row 5': "
-        '{"box_2d": [421, 607, 458, 661], "label": "source"} '
-        '{"box_2d": [421, 607, 458, 661], "label": "destination"} '
-        "move: reveal col 3 row 5 "
-        "If the cell cannot be located, output 'BOXES: NONE'."
-    )
+    """System prompt loaded from prompts.json (detector.system.<game>)."""
+    return get_detector_system_prompt(game)
 
 
 def build_user_prompt(move: str, game: str = "chess",
                       img_w: Optional[int] = None,
                       img_h: Optional[int] = None) -> str:
-    """User prompt: the specific move to detect on the attached screenshot."""
-    size = (f" The screenshot is {img_w}x{img_h} pixels."
-            if img_w and img_h else "")
-    g = game.lower()
-    if "solitaire" in g or "klondike" in g:
-        return (
-            f"The image shows a game of {game}.{size} "
-            f'The player wants to play: "{move}". '
-            f"Detect the source object (the card or pile being moved from) "
-            f"and the destination object (where it goes). Report their "
-            f"bounding boxes (labels 'source' and 'destination') and a "
-            f"short description of the move."
-        )
-    if "checkers" in g or "draughts" in g:
-        return (
-            f"The image shows a game of {game}.{size} "
-            f'The player wants to play: "{move}". '
-            f"Detect the source square (the piece being moved) and the "
-            f"destination square (where it lands). For captures, the "
-            f"destination is the empty square beyond the captured piece. "
-            f"Report their bounding boxes (labels 'source' and 'destination') "
-            f"and the from/to squares."
-        )
-    if "minesweeper" in g:
-        return (
-            f"The image shows a game of {game}.{size} "
-            f'The player wants to: "{move}". '
-            f"Locate the single cell on the grid that should be clicked. "
-            f"Report its bounding box (use the same box for both 'source' and "
-            f"'destination' since this is a single click) and a short "
-            f"description of the action."
-        )
-    return (
-        f"The image shows a game of {game}.{size} "
-        f'The player wants to play the move "{move}". Detect the source '
-        f"square (the piece being moved) and the destination square (the "
-        f"square it moves to). If the notation does not specify the source "
-        f"square, use the board to find the piece that can legally make the "
-        f"move. Report their bounding boxes (labels 'source' and "
-        f"'destination') and the from/to squares."
-    )
+    """User prompt built from the template in prompts.json
+    (detector.user_template.<game>) with {game}, {move}, {size} substituted."""
+    return build_detector_user_prompt(move, game, img_w, img_h)
 
 
 # ── Result type ─────────────────────────────────────────────────────────────

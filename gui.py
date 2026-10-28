@@ -25,8 +25,9 @@ from gi.repository import Gtk, Gdk, GdkPixbuf, GLib, Gio
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from screenshot import X11WindowCapture
-from mistral_client import ask_best_move_parsed, ensure_prompts_file, save_prompts
+from screenshot import X11WindowCapture, save_full_screenshot
+from mistral_client import ask_best_move_parsed
+from prompt_loader import ensure_prompts_file, save_prompts
 from move_parser import (Action, execute_actions, offset_actions,
                         extract_boxes, drag_to_clicks)
 from move_detector import detect_move, build_system_prompt, build_user_prompt
@@ -713,6 +714,11 @@ class AdvisorWindow(Gtk.ApplicationWindow):
             # 5. Execute (or dry-run)
             exec_log: list[str] = []
             if screen_actions and mode == "execute":
+                # Save a full-screen screenshot before the move
+                try:
+                    save_full_screenshot(prefix=f"pre_{game}")
+                except Exception as e:
+                    print(f"  Warning: full-screen screenshot failed: {e}", file=sys.stderr)
                 GLib.idle_add(
                     self.status_label.set_label,
                     "Executing in 1.5s — keep your mouse still...",

@@ -21,7 +21,8 @@ from PIL import Image
 
 from move_parser import Action
 from move_detector import detect_move
-from mistral_client import CHESS_PROMPT, ask_best_move_parsed
+from mistral_client import ask_best_move_parsed
+from prompt_loader import get_advice_prompt
 from overlay import MOVE_COLOR, draw_move_overlay
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -42,7 +43,7 @@ print(f'Photo: {PHOTO}')
 
 # Step 1: ask for the best move (text only)
 print('Step 1: Asking Mistral for the best move...')
-response, move_text = ask_best_move_parsed(api_key, PHOTO, game='chess', prompt=CHESS_PROMPT)
+response, move_text = ask_best_move_parsed(api_key, PHOTO, game='chess', prompt=get_advice_prompt('chess'))
 print('--- raw API response ---')
 print(response)
 print('--- end of raw response ---')

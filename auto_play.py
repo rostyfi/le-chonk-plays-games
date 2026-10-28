@@ -25,7 +25,7 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from screenshot import take_screenshot, take_window_screenshot, X11WindowCapture
+from screenshot import take_screenshot, take_window_screenshot, X11WindowCapture, save_full_screenshot
 from mistral_client import ask_best_move_parsed, image_size
 from move_parser import Action, execute_actions
 from move_detector import detect_move, build_system_prompt, build_user_prompt
@@ -187,6 +187,11 @@ def play_one_move(
     if actions:
         if not dry_run and window_title:
             _raise_window(window_title)
+        if not dry_run:
+            try:
+                save_full_screenshot(prefix=f"pre_{game}")
+            except Exception as e:
+                print(f"  Warning: full-screen screenshot failed: {e}", file=sys.stderr)
         log = execute_actions(actions, dry_run=dry_run)
         if verbose:
             verb = "Dry run" if dry_run else "Executing"

@@ -2,6 +2,9 @@
 """
 Minimal Mistral API client — sends a screenshot, gets move advice.
 Model: mistral-large-4, temperature: 0, reasoning_effort: none.
+
+All prompts are loaded from prompts.json via prompt_loader — no prompt
+text is hardcoded here.
 """
 
 import base64
@@ -13,96 +16,16 @@ import urllib.error
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from move_parser import extract_move_text
+from prompt_loader import (
+    get_advice_prompt, get_advice_suffix,
+    load_prompts, save_prompts, ensure_prompts_file, default_prompts,
+)
+
+# Re-export for backward compatibility (gui.py imports these from here)
+PROMPTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts.json")
 
 MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
 MODEL = "mistral-large-4"
-
-PROMPTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts.json")
-
-BASE_PROMPT = (
-    "This is a Klondike Solitaire game (draw-1, standard rules). "
-    "Think carefully about the position, then respond with EXACTLY ONE LINE "
-    "starting with 'MOVE: ' followed by a short description of the single "
-    "best LEGAL move. No analysis in the output — just the MOVE: line. "
-    "Klondike rules — follow them EXACTLY: "
-    "1. TABLEAU: build DOWN by 1 in ALTERNATING COLORS. "
-    "   Red (♥♦) goes on Black (♠♣) and Black goes on Red. "
-    "   LEGAL: 9♥ (red) on 10♠ (black). LEGAL: 2♣ (black) on 3♥ (red). "
-    "   ILLEGAL: 2♣ (black) on 3♣ (black) — SAME COLOR! "
-    "   ILLEGAL: 7♥ (red) on 8♥ (red) — SAME COLOR! "
-    "2. FOUNDATIONS: build UP by 1 in the SAME SUIT, starting from Ace. "
-    "   Example: A♠ then 2♠ then 3♠ on the spades foundation. "
-    "3. EMPTY tableau column: ONLY a King (or sequence starting with King). "
-    "Before answering, VERIFY: is the move legal? Does it follow the "
-    "alternating color rule? Never suggest an illegal move. "
-    "Examples of correct output: "
-    "'MOVE: Move 9♥ from column 3 to column 5 (on 10♠)', "
-    "'MOVE: Move A♦ to diamonds foundation', "
-    "'MOVE: Move K♠ to empty column 4', "
-    "'MOVE: Draw from the stock pile'. "
-    "If no legal move exists: 'MOVE: Draw from the stock pile'. "
-    "If stock is empty and no moves exist: 'MOVE: No moves available'. "
-    "Do NOT guess or invent cards you cannot see."
-)
-
-ADVICE_SUFFIX = (
-    "Think step-by-step about the position, but your final output must be "
-    "ONLY the MOVE: line — no other text."
-)
-
-CHESS_PROMPT = (
-    "This is a game of CHESS. "
-    "Think carefully about the position, then respond with EXACTLY ONE LINE "
-    "starting with 'MOVE: ' followed by the best move in algebraic notation. "
-    "No analysis in the output — just the MOVE: line. "
-    "Examples: 'MOVE: Nf3', 'MOVE: e4', 'MOVE: exd5', 'MOVE: O-O'. "
-    "If the best move is a pawn promotion, include it: 'MOVE: e8=Q'. "
-    "If NO legal move exists, reply: 'MOVE: No moves available'. "
-    "Do NOT report pixel coordinates or bounding boxes."
-)
-
-CHECKERS_PROMPT = (
-    "This is a game of CHECKERS (English draughts). "
-    "Think carefully about the position, then respond with EXACTLY ONE LINE "
-    "starting with 'MOVE: ' followed by a short description of the single "
-    "best legal move. No analysis in the output — just the MOVE: line. "
-    "Checkers rules: "
-    "Pieces move diagonally forward one square to an empty dark square. "
-    "Regular pieces capture by jumping diagonally over an adjacent opponent "
-    "piece to an empty square beyond it. Kings move and capture diagonally "
-    "both forward and backward. If a capture is available, you MUST capture. "
-    "If multiple captures are available, choose the one that captures the "
-    "most pieces. A regular piece reaching the opposite end is promoted to "
-    "a King. "
-    "Describe moves using square coordinates (file a-h + rank 1-8, e.g. 'c3', 'd4'). "
-    "Examples: 'MOVE: Move c3 to d4', 'MOVE: Capture e5 over d4 to c3', "
-    "'MOVE: Move king f6 to e5', 'MOVE: No moves available'. "
-    "Never suggest an illegal move. "
-    "Do NOT report pixel coordinates or bounding boxes."
-)
-
-MINESWEEPER_PROMPT = (
-    "This is a game of MINESWEEPER. "
-    "Think carefully about the position, then respond with EXACTLY ONE LINE "
-    "starting with 'MOVE: ' followed by the single best action. "
-    "No analysis in the output — just the MOVE: line. "
-    "Minesweeper rules: "
-    "The board is a grid of cells. Each cell either contains a mine or is safe. "
-    "Numbers on revealed cells show how many mines are in the 8 surrounding cells. "
-    "Use the numbers to deduce which hidden cells are safe and which contain mines. "
-    "LEFT-CLICK (reveal) a cell you are CERTAIN is safe (not a mine). "
-    "RIGHT-CLICK (flag) a cell you are CERTAIN is a mine. "
-    "Priority: 1) Flag cells that are definitely mines. "
-    "2) Reveal cells that are definitely safe. "
-    "3) If no certain move exists, reveal the cell with the lowest probability "
-    "of being a mine (prefer cells adjacent to the fewest unrevealed neighbors). "
-    "Cells are identified by column and row (1-based, left-to-right, top-to-bottom). "
-    "Examples: 'MOVE: Reveal cell col 3 row 5', 'MOVE: Flag cell col 7 row 2', "
-    "'MOVE: Reveal cell col 1 row 1'. "
-    "If the game is already won or lost, reply: 'MOVE: No moves available'. "
-    "Never suggest clicking a cell that might be a mine when a certain move exists. "
-    "Do NOT report pixel coordinates or bounding boxes."
-)
 
 def encode_image(image_path: str) -> tuple[str, str]:
     """Encode image to base64. Returns (base64, mime_type)."""
@@ -253,22 +176,16 @@ def ask_best_move(
     Anti-hallucination prompt: model must only use visible cards.
 
     prompt: custom base prompt text (e.g. from the app's prompt library).
-        If None, a game-appropriate default is chosen: CHESS_PROMPT when
-        game_hint indicates chess, otherwise BASE_PROMPT (Solitaire).
-    game_hint: used to select the default prompt when prompt is None.
+        If None, the prompt is loaded from prompts.json via
+        prompt_loader.get_advice_prompt(game_hint).
+    game_hint: used to select the prompt from prompts.json when prompt is None.
     reasoning: "none" (fast) or "max" (extended chain-of-thought).
     """
     if prompt is not None:
         text = prompt
-    elif game_hint and "chess" in game_hint.lower():
-        text = CHESS_PROMPT
-    elif game_hint and ("checkers" in game_hint.lower() or "draughts" in game_hint.lower()):
-        text = CHECKERS_PROMPT
-    elif game_hint and "minesweeper" in game_hint.lower():
-        text = MINESWEEPER_PROMPT
     else:
-        text = BASE_PROMPT
-    text += ADVICE_SUFFIX
+        text = get_advice_prompt(game_hint or "solitaire")
+    text += get_advice_suffix()
     if history:
         text = "Previous moves:\n" + "\n".join(f"  {h}" for h in history) + "\n\n" + text
 
@@ -305,52 +222,9 @@ def ask_best_move_parsed(
     return response, move_text
 
 
-# ── Prompt library (prompts.json) ──────────────────────────────────
-
-def default_prompts() -> list[dict]:
-    """Built-in prompts used to seed prompts.json on first run."""
-    return [
-        {"title": "Klondike Solitaire (default)", "text": BASE_PROMPT},
-        {"title": "Chess (default)", "text": CHESS_PROMPT},
-        {"title": "Checkers (default)", "text": CHECKERS_PROMPT},
-        {"title": "Minesweeper (default)", "text": MINESWEEPER_PROMPT},
-    ]
-
-
-def load_prompts(path: str = PROMPTS_FILE) -> tuple[list[dict], str | None]:
-    """
-    Load the prompt library from disk.
-    Returns (prompts, active_title); falls back to defaults if missing/corrupt.
-    """
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        prompts = data.get("prompts", [])
-        if prompts and all(
-            isinstance(p, dict) and "title" in p and "text" in p for p in prompts
-        ):
-            return prompts, data.get("active")
-    except (OSError, json.JSONDecodeError, AttributeError):
-        pass
-    prompts = default_prompts()
-    return prompts, prompts[0]["title"]
-
-
-def save_prompts(prompts: list[dict], active: str = None,
-                 path: str = PROMPTS_FILE) -> None:
-    """Persist the prompt library (and the active title) to disk."""
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump({"prompts": prompts, "active": active}, f,
-                  indent=2, ensure_ascii=False)
-
-
-def ensure_prompts_file(path: str = PROMPTS_FILE) -> tuple[list[dict], str | None]:
-    """Load the prompt library, creating prompts.json with defaults on first run."""
-    if not os.path.exists(path):
-        prompts = default_prompts()
-        save_prompts(prompts, prompts[0]["title"], path)
-        return prompts, prompts[0]["title"]
-    return load_prompts(path)
+# ── Prompt library re-exports (from prompt_loader) ─────────────────
+# default_prompts, load_prompts, save_prompts, ensure_prompts_file
+# are imported from prompt_loader at the top of this file.
 
 
 if __name__ == '__main__':
