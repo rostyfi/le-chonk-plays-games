@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from screenshot import X11WindowCapture, save_full_screenshot
 from mistral_client import ask_best_move_parsed
-from prompt_loader import ensure_prompts_file, save_prompts
+from prompt_loader import ensure_prompts_file, save_prompts, get_behavior
 from move_parser import (Action, execute_actions, offset_actions,
                         extract_boxes, drag_to_clicks)
 from move_detector import detect_move, build_system_prompt, build_user_prompt
@@ -365,22 +365,19 @@ class AdvisorWindow(Gtk.ApplicationWindow):
         idx = self.reasoning_dropdown.get_selected()
         return "max" if idx == 1 else "none"
 
-    def _detect_game(self) -> str:
-        """Detect the game from the active prompt title.
+    def _get_active_prompt_config(self) -> tuple[str, dict]:
+        """Return (game_key, behavior) for the currently selected prompt.
 
-        Returns 'minesweeper' if the title contains 'minesweeper',
-        'checkers' if it contains 'checkers' or 'draughts',
-        'solitaire' if it contains 'solitaire' or 'klondike',
-        otherwise 'chess' (default).
+        Looks up the active prompt in self._prompts and extracts its
+        'game' key and 'behavior' dict from prompts.json.
         """
-        title = (self._active_prompt or "").lower()
-        if "minesweeper" in title:
-            return "minesweeper"
-        if "checkers" in title or "draughts" in title:
-            return "checkers"
-        if "solitaire" in title or "klondike" in title:
-            return "solitaire"
-        return "chess"
+        idx = self.prompt_dropdown.get_selected()
+        if idx == Gtk.INVALID_LIST_POSITION or idx >= len(self._prompts):
+            return "default", {}
+        prompt = self._prompts[idx]
+        game_key = prompt.get("game", "default")
+        behavior = prompt.get("behavior", {})
+        return game_key, behavior
 
     def _on_nudge_reset(self, *_args):
         self.nudge_x_spin.set_value(0)
@@ -556,7 +553,7 @@ class AdvisorWindow(Gtk.ApplicationWindow):
             exec_log, post_path = self._execute_and_verify(
                 win, geom or win, pre_path, actions, move["actions"],
                 move["advice"], off_x + nudge[0], off_y + nudge[1],
-                move.get("game", "chess"),
+                move.get("game_key", "default"), move.get("behavior", {}),
             )
             exec_log.insert(0, f"Window '{win['name']}' at screen ({off_x},{off_y})")
             # Show the post-move screenshot with the overlay kept on it
@@ -626,11 +623,11 @@ class AdvisorWindow(Gtk.ApplicationWindow):
             GLib.idle_add(self._show_screenshot, tmp_path)
 
             # 3. Step 1 — Ask Mistral for the best move + extract move text
-            game = self._detect_game()
+            game_key, behavior = self._get_active_prompt_config()
             advice, move_text = ask_best_move_parsed(
                 self.api_key, tmp_path,
-                game=game,
                 prompt=prompt_text,
+                behavior=behavior,
                 reasoning=reasoning,
             )
 
@@ -644,18 +641,19 @@ class AdvisorWindow(Gtk.ApplicationWindow):
             detection = None
             detector_debug = ""
             if move_text and mode in ("dry_run", "execute"):
-                det = detect_move(self.api_key, tmp_path, move_text, game=game)
+                det = detect_move(self.api_key, tmp_path, move_text,
+                                  game_key=game_key, behavior=behavior)
                 detection = det.describe()
 
                 # Build a debug view of what was sent to move_detector
                 from mistral_client import image_size as _img_size
                 iw, ih = _img_size(tmp_path)
-                sys_prompt = build_system_prompt(game)
-                user_prompt = build_user_prompt(move_text, game, iw, ih)
+                sys_prompt = build_system_prompt(game_key)
+                user_prompt = build_user_prompt(move_text, game_key, iw, ih)
                 detector_debug = (
                     f"── move_detector request ──\n"
                     f"image: {tmp_path} ({iw}x{ih})\n"
-                    f"move: {move_text!r}  game: {game}\n"
+                    f"move: {move_text!r}  game_key: {game_key}\n"
                     f"\n── system prompt ──\n{sys_prompt}\n"
                     f"\n── user prompt ──\n{user_prompt}\n"
                     f"\n── raw response ──\n{det.raw}\n"
@@ -665,18 +663,20 @@ class AdvisorWindow(Gtk.ApplicationWindow):
                 if det.source_point and det.dest_point:
                     sx, sy = det.source_point
                     dx, dy = det.dest_point
-                    # For Solitaire: grab from the lower portion of the source
-                    # card — the top may be covered by face-down cards in the
-                    # column. Use 80% of box height from the top (near bottom).
-                    if game == "solitaire" and det.source_box:
+                    # Adjust grab point: grab at behavior['grab_y'] fraction
+                    # of the source box height (e.g. 0.8 = near the bottom,
+                    # useful when the top of the card is covered by other cards)
+                    grab_y = behavior.get("grab_y")
+                    if grab_y is not None and det.source_box:
                         box_top = det.source_box[1] / 1000 * ih
                         box_h = (det.source_box[3] - det.source_box[1]) / 1000 * ih
-                        sy = int(box_top + box_h * 0.8)
-                    # For Minesweeper: single click (left=reveal, right=flag)
-                    if game == "minesweeper":
-                        is_flag = "flag" in move_text.lower()
+                        sy = int(box_top + box_h * grab_y)
+                    # Single-click action (e.g. reveal/flag a cell)
+                    if behavior.get("action") == "click":
+                        rc_word = behavior.get("right_click_word", "")
+                        is_right = rc_word and rc_word in move_text.lower()
                         actions.append(Action(
-                            type='right_click' if is_flag else 'click',
+                            type='right_click' if is_right else 'click',
                             x1=sx, y1=sy,
                             raw=f"move_detector: {det.description or move_text}",
                         ))
@@ -689,7 +689,8 @@ class AdvisorWindow(Gtk.ApplicationWindow):
             if actions:
                 self._last_move = {
                     "win": win, "actions": actions, "advice": advice,
-                    "move_text": move_text, "detection": detection, "game": game,
+                    "move_text": move_text, "detection": detection,
+                    "game_key": game_key, "behavior": behavior,
                 }
                 screen_actions = offset_actions(
                     actions, off_x + nudge[0], off_y + nudge[1]
@@ -716,7 +717,7 @@ class AdvisorWindow(Gtk.ApplicationWindow):
             if screen_actions and mode == "execute":
                 # Save a full-screen screenshot before the move
                 try:
-                    save_full_screenshot(prefix=f"pre_{game}")
+                    save_full_screenshot(prefix=f"pre_{game_key}")
                 except Exception as e:
                     print(f"  Warning: full-screen screenshot failed: {e}", file=sys.stderr)
                 GLib.idle_add(
@@ -726,7 +727,7 @@ class AdvisorWindow(Gtk.ApplicationWindow):
                 time.sleep(1.5)
                 exec_log, post_path = self._execute_and_verify(
                     win, geom or win, tmp_path, screen_actions, actions, advice,
-                    off_x + nudge[0], off_y + nudge[1], game,
+                    off_x + nudge[0], off_y + nudge[1], game_key, behavior,
                 )
                 # Show the post-move screenshot with the overlay kept on it
                 try:
@@ -799,13 +800,16 @@ class AdvisorWindow(Gtk.ApplicationWindow):
 
     def _execute_and_verify(self, win: dict, geom: dict, pre_path: str,
                             screen_actions: list, actions: list, advice: str,
-                            dx: int, dy: int, game: str = "chess") -> tuple[list[str], str]:
+                            dx: int, dy: int, game_key: str = "default",
+                            behavior: dict = None) -> tuple[list[str], str]:
         """
         Execute the move, then verify the board actually changed around the
-        move (before/after screenshot comparison). For chess, if the drag did
-        not register, retry once with click-click. For Solitaire, always use
-        drag — never fall back to clicks. Returns (exec_log, post_screenshot_path).
+        move (before/after screenshot comparison). If the drag did not
+        register, retry once with click-click. When behavior['grab_y'] is
+        set, also retry the drag with an adjusted grab point before falling
+        back to clicks. Returns (exec_log, post_screenshot_path).
         """
+        behavior = behavior or {}
         log: list[str] = []
         # Raise the game window so the injected input reaches it — the
         # advisor window may overlap it and would eat the clicks
@@ -828,15 +832,15 @@ class AdvisorWindow(Gtk.ApplicationWindow):
             log.append("Move verified.")
             return log, post_path
 
-        # Solitaire: retry drag with adjusted grab point (60% of box height
-        # instead of 80%) before giving up — the first grab point may have
-        # been on a face-down card
-        if game == "solitaire":
+        # When a grab_y offset is configured, retry the drag with an adjusted
+        # grab point (shifted up by 15px) before giving up — the first grab
+        # point may have been on a covered card.
+        if behavior.get("grab_y") is not None:
             log.append("Board unchanged — retrying drag with adjusted grab point...")
             retry_actions = []
             for a in actions:
                 if a.type == "drag" and a.x1 is not None:
-                    # Shift grab point up: from 80% to 60% of original offset
+                    # Shift grab point up: from grab_y to grab_y - 15px
                     retry_actions.append(Action(
                         type='drag', x1=a.x1, y1=a.y1 - 15,
                         x2=a.x2, y2=a.y2, raw=a.raw + " (retry)",

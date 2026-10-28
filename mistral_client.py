@@ -17,8 +17,8 @@ import urllib.error
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from move_parser import extract_move_text
 from prompt_loader import (
-    get_advice_prompt, get_advice_suffix,
-    load_prompts, save_prompts, ensure_prompts_file, default_prompts,
+    get_advice_suffix,
+    load_prompts, save_prompts, ensure_prompts_file,
 )
 
 # Re-export for backward compatibility (gui.py imports these from here)
@@ -166,26 +166,17 @@ def _call_api(api_key: str, image_path: str, user_prompt: str, model: str,
 def ask_best_move(
     api_key: str,
     image_path: str,
-    game_hint: str = None,
+    prompt: str,
     history: list[str] = None,
-    prompt: str = None,
     reasoning: str = "none",
 ) -> str:
     """
-    Send a game screenshot to Mistral Large 4 and get the best move advice.
-    Anti-hallucination prompt: model must only use visible cards.
+    Send a screenshot to Mistral Large 4 and get the best move advice.
 
-    prompt: custom base prompt text (e.g. from the app's prompt library).
-        If None, the prompt is loaded from prompts.json via
-        prompt_loader.get_advice_prompt(game_hint).
-    game_hint: used to select the prompt from prompts.json when prompt is None.
+    prompt: the advice prompt text (from the prompt library in prompts.json).
     reasoning: "none" (fast) or "max" (extended chain-of-thought).
     """
-    if prompt is not None:
-        text = prompt
-    else:
-        text = get_advice_prompt(game_hint or "solitaire")
-    text += get_advice_suffix()
+    text = prompt + get_advice_suffix()
     if history:
         text = "Previous moves:\n" + "\n".join(f"  {h}" for h in history) + "\n\n" + text
 
@@ -196,18 +187,20 @@ def ask_best_move(
 def ask_best_move_parsed(
     api_key: str,
     image_path: str,
-    game: str = "chess",
-    game_hint: str = None,
+    prompt: str,
+    behavior: dict = None,
     history: list[str] = None,
-    prompt: str = None,
     reasoning: str = "none",
 ) -> tuple[str, str]:
     """
     Ask Mistral for the best move and extract the move text from the response.
 
     Combines ask_best_move() with move_parser.extract_move_text() so callers
-    get both the raw AI response and the parsed move (e.g. "Nf3") in one call.
+    get both the raw AI response and the parsed move in one call.
 
+    prompt:   the advice prompt text (from the prompt library).
+    behavior: behaviour config dict (from the prompt's 'behavior' field).
+              Controls how the move text is extracted (e.g. algebraic notation).
     reasoning: "none" (fast) or "max" (extended chain-of-thought).
 
     Returns (raw_response, move_text). move_text is empty string if no move
@@ -215,15 +208,15 @@ def ask_best_move_parsed(
     """
     response = ask_best_move(
         api_key, image_path,
-        game_hint=game_hint or game, history=history, prompt=prompt,
+        prompt=prompt, history=history,
         reasoning=reasoning,
     )
-    move_text = extract_move_text(response, game=game)
+    move_text = extract_move_text(response, behavior=behavior)
     return response, move_text
 
 
 # ── Prompt library re-exports (from prompt_loader) ─────────────────
-# default_prompts, load_prompts, save_prompts, ensure_prompts_file
+# load_prompts, save_prompts, ensure_prompts_file
 # are imported from prompt_loader at the top of this file.
 
 

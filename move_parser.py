@@ -296,9 +296,9 @@ def extract_move_description(response: str) -> str:
     return ""
 
 
-# Chess move patterns for extraction from natural-language advice.
+# Algebraic move patterns for extraction from natural-language advice.
 # Matches: e4, Nf3, exd5, O-O, O-O-O, e8=Q, Nbd7, R1e2, Bxf7+, Qh5#, etc.
-_CHESS_MOVE_RE = re.compile(
+_ALGEBRAIC_MOVE_RE = re.compile(
     r'(?<![a-zA-Z0-9])'
     r'(O-O-O|O-O|0-0-0|0-0|'
     r'[NBRQK][a-h]?[1-8]?x?[a-h][1-8](?:=[NBRQ])?[+#]?|'
@@ -307,48 +307,49 @@ _CHESS_MOVE_RE = re.compile(
 )
 
 
-def extract_move_text(response: str, game: str = "chess") -> str:
+def extract_move_text(response: str, behavior: Optional[dict] = None) -> str:
     """
     Extract the move to play from the AI's advice response.
 
-    For chess: extracts algebraic notation (e.g. "Nf3", "e4", "exd5", "O-O")
-    from the last sentence.
+    When behavior['move_format'] == 'algebraic': extracts algebraic notation
+    (e.g. "Nf3", "e4", "exd5", "O-O") from the last sentence.
 
-    For other games (solitaire, etc.): looks for a 'MOVE: <description>'
-    line first (the AI is instructed to end with this). Falls back to
-    the last non-empty line if no MOVE: line is found.
+    Otherwise: looks for a 'MOVE: <description>' line first (the AI is
+    instructed to end with this). Falls back to the last non-empty line
+    if no MOVE: line is found.
 
     Returns the extracted move string, or empty string if none found.
     """
+    behavior = behavior or {}
     lines = [l.strip() for l in response.strip().splitlines() if l.strip()]
     if not lines:
         return ""
 
-    if game == "chess":
+    if behavior.get("move_format") == "algebraic":
         # First: look for 'MOVE: <notation>' line (search from the end)
         for line in reversed(lines):
             m = re.match(r'^MOVE\s*:\s*(.+)', line, re.IGNORECASE)
             if m:
                 desc = m.group(1).strip()
-                # Extract the chess move from the description
-                cm = _CHESS_MOVE_RE.search(desc)
+                # Extract the algebraic move from the description
+                cm = _ALGEBRAIC_MOVE_RE.search(desc)
                 if cm:
                     return cm.group(1)
-                if _CHESS_MOVE_RE.fullmatch(desc):
+                if _ALGEBRAIC_MOVE_RE.fullmatch(desc):
                     return desc
         # Fallback: extract from the last sentence
         last = lines[-1]
-        m = _CHESS_MOVE_RE.search(last)
+        m = _ALGEBRAIC_MOVE_RE.search(last)
         if m:
             return m.group(1)
-        if _CHESS_MOVE_RE.fullmatch(last):
+        if _ALGEBRAIC_MOVE_RE.fullmatch(last):
             return last
-        m = _CHESS_MOVE_RE.search(response)
+        m = _ALGEBRAIC_MOVE_RE.search(response)
         if m:
             return m.group(1)
         return last
 
-    # Non-chess: look for 'MOVE: <description>' line (search from the end)
+    # Default: look for 'MOVE: <description>' line (search from the end)
     for line in reversed(lines):
         m = re.match(r'^MOVE\s*:\s*(.+)', line, re.IGNORECASE)
         if m:
@@ -521,15 +522,15 @@ def parse_and_execute(response: str, dry_run: bool = False) -> tuple[list[Action
 if __name__ == '__main__':
     # Test parser with a sample response
     sample = """
-GAME: Klondike Solitaire (draw-1)
+GAME: Card Game (draw-1)
 CONFIDENCE: high
 
 BOARD STATE:
-Tableau col 1: [K♠ face-down, Q♥ face-up]
+Tableau col 1: [K face-down, Q face-up]
 ...
 
 BEST MOVE:
-Move the 7♦ from tableau column 3 to tableau column 5
+Move the 7 from tableau column 3 to tableau column 5
 
 WHY:
 This unlocks a face-down card in column 3.

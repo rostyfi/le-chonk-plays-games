@@ -22,11 +22,20 @@ from PIL import Image
 from move_parser import Action
 from move_detector import detect_move
 from mistral_client import ask_best_move_parsed
-from prompt_loader import get_advice_prompt
+from prompt_loader import get_prompt_by_title
 from overlay import MOVE_COLOR, draw_move_overlay
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PHOTO = os.environ.get('CHESS_PHOTO', os.path.join(HERE, 'chess_start_large.png'))
+
+# Load the chess prompt config from prompts.json
+_prompt_cfg = get_prompt_by_title('Chess (default)')
+if _prompt_cfg is None:
+    print('Error: "Chess (default)" prompt not found in prompts.json')
+    sys.exit(1)
+_prompt_text = _prompt_cfg['text']
+_game_key = _prompt_cfg.get('game', 'default')
+_behavior = _prompt_cfg.get('behavior', {})
 
 
 def has_color_near(px, cx, cy, color, r=4):
@@ -43,7 +52,7 @@ print(f'Photo: {PHOTO}')
 
 # Step 1: ask for the best move (text only)
 print('Step 1: Asking Mistral for the best move...')
-response, move_text = ask_best_move_parsed(api_key, PHOTO, game='chess', prompt=get_advice_prompt('chess'))
+response, move_text = ask_best_move_parsed(api_key, PHOTO, prompt=_prompt_text, behavior=_behavior)
 print('--- raw API response ---')
 print(response)
 print('--- end of raw response ---')
@@ -54,7 +63,7 @@ assert move_text, 'no move extracted from the response'
 
 # Step 2: detect the move on the board for pixel coordinates
 print('Step 2: Detecting move on the board...')
-det = detect_move(api_key, PHOTO, move_text, game='chess')
+det = detect_move(api_key, PHOTO, move_text, game_key=_game_key, behavior=_behavior)
 print(det.describe())
 assert det.source_point and det.dest_point, 'move_detector returned no pixel coordinates'
 

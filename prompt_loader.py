@@ -3,34 +3,37 @@
 Prompt loader — single source of truth for all LLM prompts.
 
 All prompts live in prompts.json. This module loads them and provides
-typed getters so that mistral_client.py, move_detector.py, and gui.py
-never hardcode prompt text.
+typed getters so that callers never hardcode prompt text or game names.
 
 JSON structure:
     {
       "advice_suffix": "...",
       "prompts": [
-        {"title": "...", "game": "solitaire", "text": "..."},
+        {
+          "title": "...",
+          "game": "...",          ← key into detector.system / detector.user_template
+          "text": "...",           ← advice prompt sent to the model
+          "behavior": {            ← game-agnostic behaviour config
+            "action": "drag",      ← "drag" or "click"
+            "grab_y": 0.8,         ← grab point as fraction of source box height
+            "board_grid": true,    ← detect a regular grid and compute exact boxes
+            "validate_move": true, ← validate reported source→dest geometry
+            "move_format": "algebraic", ← "algebraic" (SAN-like), "squares", or null
+            "right_click_word": "flag"  ← word in move text that means right-click
+          }
+        },
         ...
       ],
-      "active": "Klondike Solitaire (default)",
+      "active": "...",
       "detector": {
-        "system": {
-          "chess": "...{game}...",
-          "solitaire": "...",
-          "checkers": "...",
-          "minesweeper": "..."
-        },
-        "user_template": {
-          "chess": "...{game}...{move}...{size}...",
-          ...
-        }
+        "system": { "<game>": "...{game}...", ... },
+        "user_template": { "<game>": "...{game}...{move}...{size}...", ... }
       }
     }
 
 Template placeholders:
-    {game}  — game name (e.g. "chess")
-    {move}  — move text (e.g. "Nf3") — detector user templates only
+    {game}  — game name (from the prompt's 'game' field)
+    {move}  — move text — detector user templates only
     {size}  — image dimensions string — detector user templates only
 
 Substitution uses str.replace() (not str.format()) because the detector
@@ -50,95 +53,25 @@ _FALLBACK_ADVICE_SUFFIX = (
     "ONLY the MOVE: line — no other text."
 )
 
-_FALLBACK_ADVICE = {
-    "solitaire": (
-        "This is a Klondike Solitaire game. Respond with EXACTLY ONE LINE "
-        "starting with 'MOVE: ' followed by the best legal move."
-    ),
-    "chess": (
-        "This is a game of CHESS. Respond with EXACTLY ONE LINE starting "
-        "with 'MOVE: ' followed by the best move in algebraic notation."
-    ),
-    "checkers": (
-        "This is a game of CHECKERS. Respond with EXACTLY ONE LINE starting "
-        "with 'MOVE: ' followed by the best legal move."
-    ),
-    "minesweeper": (
-        "This is a game of MINESWEEPER. Respond with EXACTLY ONE LINE "
-        "starting with 'MOVE: ' followed by the best action."
-    ),
-}
+_FALLBACK_ADVICE_TEXT = (
+    "You are playing a game. Look at the screenshot and respond with "
+    "EXACTLY ONE LINE starting with 'MOVE: ' followed by the best action."
+)
 
-_FALLBACK_DETECTOR_SYSTEM = {
-    "chess": (
-        "You are an object-detection vision model. The game is {game}. "
-        "Locate the source and destination squares for the given move. "
-        'End with: {{"box_2d": [xmin, ymin, xmax, ymax], "label": "source"}} '
-        '{{"box_2d": [xmin, ymin, xmax, ymax], "label": "destination"}} '
-        "from: <square> to: <square>"
-    ),
-    "solitaire": (
-        "You are an object-detection vision model. The game is {game}. "
-        "Locate the source card/pile and destination. "
-        'End with: {{"box_2d": [xmin, ymin, xmax, ymax], "label": "source"}} '
-        '{{"box_2d": [xmin, ymin, xmax, ymax], "label": "destination"}} '
-        "move: <description>"
-    ),
-    "checkers": (
-        "You are an object-detection vision model. The game is {game}. "
-        "Locate the source and destination squares for the given move. "
-        'End with: {{"box_2d": [xmin, ymin, xmax, ymax], "label": "source"}} '
-        '{{"box_2d": [xmin, ymin, xmax, ymax], "label": "destination"}} '
-        "from: <square> to: <square>"
-    ),
-    "minesweeper": (
-        "You are an object-detection vision model. The game is {game}. "
-        "Locate the single cell to click. Use the same box for source and "
-        "destination. "
-        'End with: {{"box_2d": [xmin, ymin, xmax, ymax], "label": "source"}} '
-        '{{"box_2d": [xmin, ymin, xmax, ymax], "label": "destination"}} '
-        "move: <description>"
-    ),
-}
+_FALLBACK_DETECTOR_SYSTEM = (
+    "You are an object-detection vision model. The game is {game}. "
+    "Locate the source and destination for the given move. "
+    'End with: {{"box_2d": [xmin, ymin, xmax, ymax], "label": "source"}} '
+    '{{"box_2d": [xmin, ymin, xmax, ymax], "label": "destination"}} '
+    "move: <description>"
+)
 
-_FALLBACK_DETECTOR_USER = {
-    "chess": (
-        'The image shows a game of {game}.{size} '
-        'The player wants to play the move "{move}". '
-        "Detect the source and destination squares."
-    ),
-    "solitaire": (
-        'The image shows a game of {game}.{size} '
-        'The player wants to play: "{move}". '
-        "Detect the source object and the destination object."
-    ),
-    "checkers": (
-        'The image shows a game of {game}.{size} '
-        'The player wants to play: "{move}". '
-        "Detect the source and destination squares."
-    ),
-    "minesweeper": (
-        'The image shows a game of {game}.{size} '
-        'The player wants to: "{move}". '
-        "Locate the single cell to click."
-    ),
-}
-
-
-# ── Game key normalisation ──────────────────────────────────────────
-
-def _game_key(game: str) -> str:
-    """Normalise a game name/hint to a canonical key."""
-    g = (game or "").lower()
-    if "checkers" in g or "draughts" in g:
-        return "checkers"
-    if "minesweeper" in g:
-        return "minesweeper"
-    if "chess" in g:
-        return "chess"
-    if "solitaire" in g or "klondike" in g:
-        return "solitaire"
-    return "solitaire"  # default
+_FALLBACK_DETECTOR_USER = (
+    'The image shows a game of {game}.{size} '
+    'The player wants to play: "{move}". '
+    "Detect the source and destination. Report their bounding boxes "
+    "(labels 'source' and 'destination') and a short description."
+)
 
 
 # ── JSON load / save ────────────────────────────────────────────────
@@ -159,24 +92,21 @@ def _save_json(data: dict) -> None:
 
 
 def _build_default_json() -> dict:
-    """Build a minimal default prompts.json structure."""
-    titles = {
-        "solitaire": "Klondike Solitaire (default)",
-        "chess": "Chess (default)",
-        "checkers": "Checkers (default)",
-        "minesweeper": "Minesweeper (default)",
-    }
-    prompts = [
-        {"title": titles[g], "game": g, "text": _FALLBACK_ADVICE[g]}
-        for g in ("solitaire", "chess", "checkers", "minesweeper")
-    ]
+    """Build a minimal default prompts.json structure (game-agnostic)."""
     return {
         "advice_suffix": _FALLBACK_ADVICE_SUFFIX,
-        "prompts": prompts,
-        "active": titles["solitaire"],
+        "prompts": [
+            {
+                "title": "Default",
+                "game": "default",
+                "text": _FALLBACK_ADVICE_TEXT,
+                "behavior": {"action": "drag"},
+            }
+        ],
+        "active": "Default",
         "detector": {
-            "system": dict(_FALLBACK_DETECTOR_SYSTEM),
-            "user_template": dict(_FALLBACK_DETECTOR_USER),
+            "system": {"default": _FALLBACK_DETECTOR_SYSTEM},
+            "user_template": {"default": _FALLBACK_DETECTOR_USER},
         },
     }
 
@@ -199,62 +129,69 @@ def get_advice_suffix() -> str:
     return data.get("advice_suffix") or _FALLBACK_ADVICE_SUFFIX
 
 
-def get_advice_prompt(game: str = "solitaire") -> str:
-    """Return the advice prompt text for a game.
+# ── Prompt lookup by title ──────────────────────────────────────────
 
-    Looks up the prompt by its 'game' field in prompts.json.
-    Falls back to a minimal default if not found.
-    """
-    key = _game_key(game)
+def get_prompt_by_title(title: str) -> dict | None:
+    """Return the full prompt dict (title, game, text, behavior) for a title."""
     data = _load_json()
     for p in data.get("prompts", []):
-        if p.get("game") == key:
-            return p.get("text", "")
-    return _FALLBACK_ADVICE.get(key, _FALLBACK_ADVICE["solitaire"])
+        if p.get("title") == title:
+            return p
+    return None
+
+
+def get_active_prompt() -> dict | None:
+    """Return the full prompt dict for the active prompt."""
+    data = _load_json()
+    active = data.get("active")
+    if active:
+        return get_prompt_by_title(active)
+    prompts = data.get("prompts", [])
+    return prompts[0] if prompts else None
+
+
+def get_behavior(prompt: dict) -> dict:
+    """Return the behaviour config dict from a prompt (empty dict if none)."""
+    return prompt.get("behavior", {}) if prompt else {}
 
 
 # ── Detector prompts (step 2: where to move on screen) ─────────────
 
-def get_detector_system_prompt(game: str = "chess") -> str:
-    """Return the move-detector system prompt for a game.
+def get_detector_system(game_key: str) -> str:
+    """Return the move-detector system prompt for a game key.
 
-    The template contains a {game} placeholder which is replaced with
-    the actual game name before returning.
+    Looks up detector.system[game_key] in prompts.json. The template
+    contains a {game} placeholder which is replaced with the game key.
     """
-    key = _game_key(game)
     data = _load_json()
     template = (
-        data.get("detector", {}).get("system", {}).get(key)
-        or _FALLBACK_DETECTOR_SYSTEM.get(key)
-        or _FALLBACK_DETECTOR_SYSTEM["chess"]
+        data.get("detector", {}).get("system", {}).get(game_key)
+        or _FALLBACK_DETECTOR_SYSTEM
     )
-    return template.replace("{game}", game)
+    return template.replace("{game}", game_key)
 
 
-def get_detector_user_template(game: str = "chess") -> str:
-    """Return the move-detector user prompt template for a game.
+def get_detector_user_template(game_key: str) -> str:
+    """Return the move-detector user prompt template for a game key.
 
     The returned template contains {game}, {move}, and {size}
     placeholders. Callers must substitute {move} and {size} themselves.
     """
-    key = _game_key(game)
     data = _load_json()
-    template = (
-        data.get("detector", {}).get("user_template", {}).get(key)
-        or _FALLBACK_DETECTOR_USER.get(key)
-        or _FALLBACK_DETECTOR_USER["chess"]
+    return (
+        data.get("detector", {}).get("user_template", {}).get(game_key)
+        or _FALLBACK_DETECTOR_USER
     )
-    return template
 
 
-def build_detector_user_prompt(move: str, game: str = "chess",
+def build_detector_user_prompt(move: str, game_key: str,
                                img_w: int | None = None,
                                img_h: int | None = None) -> str:
     """Build the full detector user prompt by substituting all placeholders."""
-    template = get_detector_user_template(game)
+    template = get_detector_user_template(game_key)
     size = f" The screenshot is {img_w}x{img_h} pixels." if img_w and img_h else ""
     return (template
-            .replace("{game}", game)
+            .replace("{game}", game_key)
             .replace("{move}", move)
             .replace("{size}", size))
 
@@ -279,17 +216,3 @@ def save_prompts(prompts: list[dict], active: str = None) -> None:
     if active is not None:
         data["active"] = active
     _save_json(data)
-
-
-def default_prompts() -> list[dict]:
-    """Return the built-in default prompts (for seeding / reference)."""
-    titles = {
-        "solitaire": "Klondike Solitaire (default)",
-        "chess": "Chess (default)",
-        "checkers": "Checkers (default)",
-        "minesweeper": "Minesweeper (default)",
-    }
-    return [
-        {"title": titles[g], "game": g, "text": _FALLBACK_ADVICE[g]}
-        for g in ("solitaire", "chess", "checkers", "minesweeper")
-    ]

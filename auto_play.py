@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Card Game Auto-Play — screenshot → AI move → move_detector → perform.
+Auto-Play — screenshot → AI move → move_detector → perform.
 
 Two-step flow:
-  1. Screenshot → Mistral Large 4 → best move (text, e.g. "Nf3")
+  1. Screenshot → Mistral Large 4 → best move (text)
   2. move_detector → resolve the move into source/destination pixel
      coordinates → drag via X11 mouse input.
 
@@ -12,7 +12,7 @@ Use --dry-run to preview without clicking.
 Usage:
     python3 auto_play.py --dry-run         # SAFE: show planned actions, no clicks
     python3 auto_play.py                  # Screenshot + AI plays one move
-    python3 auto_play.py --game "chess"  # Specify the game
+    python3 auto_play.py --prompt "My Game"  # Select a prompt by title
     python3 auto_play.py --loop 10        # Play 10 moves in a row (with history)
     python3 auto_play.py --delay 2        # Wait 2s between moves (loop mode)
 """
@@ -29,6 +29,7 @@ from screenshot import take_screenshot, take_window_screenshot, X11WindowCapture
 from mistral_client import ask_best_move_parsed, image_size
 from move_parser import Action, execute_actions
 from move_detector import detect_move, build_system_prompt, build_user_prompt
+from prompt_loader import get_prompt_by_title, get_behavior
 from input_controller import X11Input
 
 
@@ -54,7 +55,7 @@ def _raise_window(window_title: str):
 
 def play_one_move(
     api_key: str,
-    game_hint: str = None,
+    prompt_title: str = None,
     window_title: str = None,
     save_screenshot: str = None,
     verbose: bool = True,
@@ -66,15 +67,26 @@ def play_one_move(
 ) -> dict:
     """
     Two-step auto-play:
-      Step 1 — screenshot → AI → best move text (e.g. "Nf3").
+      Step 1 — screenshot → AI → best move text.
       Step 2 — move_detector → source/destination pixel coordinates →
                drag via X11 input injection.
 
+    prompt_title: title of a prompt in prompts.json. If None, the active
+                  prompt is used.
     history: list of previous moves for loop context.
     move_number: current move number (1-based) for history tracking.
     dry_run: show the planned actions without moving the mouse.
     """
-    game = (game_hint or "chess").lower()
+    # Look up the prompt config from prompts.json
+    prompt_cfg = get_prompt_by_title(prompt_title) if prompt_title else None
+    if prompt_cfg is None:
+        from prompt_loader import get_active_prompt
+        prompt_cfg = get_active_prompt()
+    if prompt_cfg is None:
+        raise RuntimeError("No prompt found in prompts.json")
+    prompt_text = prompt_cfg.get("text", "")
+    game_key = prompt_cfg.get("game", "default")
+    behavior = prompt_cfg.get("behavior", {})
 
     # ── Step 0: Screenshot (with 5s delay so user can switch windows) ──
     if verbose:
@@ -105,7 +117,7 @@ def play_one_move(
         print(f"[2/4] Asking Mistral for the best move{mode_note}{history_note}...")
     response, move_text = ask_best_move_parsed(
         api_key, image_path,
-        game=game, game_hint=game_hint, history=history,
+        prompt=prompt_text, behavior=behavior, history=history,
         reasoning=reasoning,
     )
 
@@ -133,14 +145,15 @@ def play_one_move(
         iw, ih = image_size(image_path)
         print(f"      move_detector request:")
         print(f"        image: {image_path} ({iw}x{ih})")
-        print(f"        move: {move_text!r}  game: {game}")
-        print(f"        system prompt ({len(build_system_prompt(game))} chars):")
-        for line in build_system_prompt(game).splitlines():
+        print(f"        move: {move_text!r}  game_key: {game_key}")
+        print(f"        system prompt ({len(build_system_prompt(game_key))} chars):")
+        for line in build_system_prompt(game_key).splitlines():
             print(f"          {line}")
         print(f"        user prompt:")
-        for line in build_user_prompt(move_text, game, iw, ih).splitlines():
+        for line in build_user_prompt(move_text, game_key, iw, ih).splitlines():
             print(f"          {line}")
-    det = detect_move(api_key, image_path, move_text, game=game)
+    det = detect_move(api_key, image_path, move_text,
+                      game_key=game_key, behavior=behavior)
     if verbose:
         print(f"      {det.describe()}")
         print(f"      raw response:")
@@ -152,15 +165,16 @@ def play_one_move(
     if det.source_point and det.dest_point:
         sx, sy = det.source_point
         dx, dy = det.dest_point
-        # For Solitaire: grab from 80% of the source box height (near the
-        # bottom of the card) — the top may be covered by face-down cards.
-        if game == "solitaire" and det.source_box:
+        # Adjust grab point: grab at behavior['grab_y'] fraction of the
+        # source box height (e.g. 0.8 = near the bottom of the card).
+        grab_y = behavior.get("grab_y")
+        if grab_y is not None and det.source_box:
             from mistral_client import image_size as _img_size
             _iw, _ih = _img_size(image_path)
             if _ih:
                 box_top = det.source_box[1] / 1000 * _ih
                 box_h = (det.source_box[3] - det.source_box[1]) / 1000 * _ih
-                sy = int(box_top + box_h * 0.8)
+                sy = int(box_top + box_h * grab_y)
         # Window captures are window-relative — translate to screen coordinates
         if window_title:
             off_x, off_y = _window_offset(window_title)
@@ -168,11 +182,12 @@ def play_one_move(
             sy += off_y
             dx += off_x
             dy += off_y
-        # For Minesweeper: single click (left=reveal, right=flag)
-        if game == "minesweeper":
-            is_flag = "flag" in move_text.lower()
+        # Single-click action (e.g. reveal/flag a cell)
+        if behavior.get("action") == "click":
+            rc_word = behavior.get("right_click_word", "")
+            is_right = rc_word and rc_word in move_text.lower()
             actions.append(Action(
-                type='right_click' if is_flag else 'click',
+                type='right_click' if is_right else 'click',
                 x1=sx, y1=sy,
                 raw=f"move_detector: {det.description or move_text} ({sx},{sy})",
             ))
@@ -189,7 +204,7 @@ def play_one_move(
             _raise_window(window_title)
         if not dry_run:
             try:
-                save_full_screenshot(prefix=f"pre_{game}")
+                save_full_screenshot(prefix=f"pre_{game_key}")
             except Exception as e:
                 print(f"  Warning: full-screen screenshot failed: {e}", file=sys.stderr)
         log = execute_actions(actions, dry_run=dry_run)
@@ -234,13 +249,13 @@ def main():
     parser.add_argument(
         '--window', '-w',
         default=None,
-        help='Capture only this window (by title substring, e.g. "Solitaire"). '
+        help='Capture only this window (by title substring). '
              'Full screen if not specified.'
     )
     parser.add_argument(
-        '--game', '-g',
+        '--prompt', '-p',
         default=None,
-        help='Tell the AI which game you are playing'
+        help='Select a prompt by title from prompts.json (default: active prompt)'
     )
     parser.add_argument(
         '--loop', '-l',
@@ -309,7 +324,7 @@ def main():
         try:
             result = play_one_move(
                 api_key=args.api_key,
-                game_hint=args.game,
+                prompt_title=args.prompt,
                 window_title=args.window,
                 save_screenshot=save_path,
                 verbose=verbose,

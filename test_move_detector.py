@@ -24,6 +24,10 @@ import move_detector as md
 HERE = os.path.dirname(os.path.abspath(__file__))
 PHOTO = os.environ.get('CHESS_PHOTO', os.path.join(HERE, 'chess_start_large.png'))
 
+# Behaviour config matching the "chess" prompt in prompts.json — used by
+# tests that exercise grid detection and move validation.
+CHESS_BEHAVIOR = {'validate_move': True, 'board_grid': True, 'move_format': 'algebraic'}
+
 PASS = 0
 FAIL = 0
 
@@ -162,7 +166,7 @@ def test_build_user_prompt():
     check('contains image size', '1306x866' in p, p)
     p2 = md.build_user_prompt('Nf3')
     check('no size when omitted', 'pixels' not in p2, p2)
-    check('default game chess', 'chess' in p2, p2)
+    check('default game key', 'default' in p2, p2)
 
 
 def test_detect_move_end_to_end_stub():
@@ -180,7 +184,8 @@ def test_detect_move_end_to_end_stub():
     orig = md._chat_completion
     md._chat_completion = fake_chat
     try:
-        res = md.detect_move('test-key', PHOTO, 'e4')
+        res = md.detect_move('test-key', PHOTO, 'e4',
+                             game_key='chess', behavior=CHESS_BEHAVIOR)
     finally:
         md._chat_completion = orig
 
@@ -239,7 +244,8 @@ def test_detect_move_from_to_stub():
     orig = md._chat_completion
     md._chat_completion = lambda *a, **k: REPLY_E4
     try:
-        ft = md.detect_move_from_to('k', PHOTO, 'e4')
+        ft = md.detect_move_from_to('k', PHOTO, 'e4',
+                                    game_key='chess', behavior=CHESS_BEHAVIOR)
     finally:
         md._chat_completion = orig
     check('returns (e2, e4)', ft == ('e2', 'e4'), str(ft))
@@ -249,7 +255,7 @@ def test_draw_detected_move():
     print('[offline] draw_detected_move')
     from PIL import Image
     w, h = md._image_size(PHOTO)
-    det = md.parse_detection(REPLY_E4, 'e4', 'chess', w, h)
+    det = md.parse_detection(REPLY_E4, 'e4', 'chess', w, h, CHESS_BEHAVIOR)
     out = '/tmp/test_move_detector_overlay.png'
     ret = md.draw_detected_move(PHOTO, det, out)
     check('returns out_path', ret == out, ret)
@@ -279,7 +285,8 @@ def test_detect_and_draw_stub():
     md._chat_completion = lambda *a, **k: REPLY_E4
     out = '/tmp/test_move_detector_and_draw.png'
     try:
-        det, path = md.detect_and_draw('k', PHOTO, 'e4', out)
+        det, path = md.detect_and_draw('k', PHOTO, 'e4', out,
+                                       game_key='chess', behavior=CHESS_BEHAVIOR)
     finally:
         md._chat_completion = orig
     check('returns det e2->e4', det.from_to == ('e2', 'e4'), str(det.from_to))
@@ -293,20 +300,20 @@ def test_detect_and_draw_stub():
           has_color_near(px, mid[0], mid[1], md.MOVE_COLOR))
 
 
-def test_parse_san():
-    print('[offline] _parse_san')
-    check('Nf3 piece N', md._parse_san('Nf3')['piece'] == 'N')
-    check('Nf3 to f3', md._parse_san('Nf3')['to'] == 'f3')
-    check('Nc3 piece N', md._parse_san('Nc3')['piece'] == 'N')
-    check('Nc3 to c3', md._parse_san('Nc3')['to'] == 'c3')
-    check('e4 piece P', md._parse_san('e4')['piece'] == 'P')
-    check('e4 to e4', md._parse_san('e4')['to'] == 'e4')
-    check('exd5 capture', md._parse_san('exd5')['capture'] is True)
-    check('exd5 to d5', md._parse_san('exd5')['to'] == 'd5')
-    check('O-O castle', md._parse_san('O-O')['castle'] is True)
-    check('O-O piece K', md._parse_san('O-O')['piece'] == 'K')
-    check('e8=Q promo', md._parse_san('e8=Q')['promo'] == 'Q')
-    check('Qh4 piece Q', md._parse_san('Qh4')['piece'] == 'Q')
+def test_parse_algebraic_move():
+    print('[offline] _parse_algebraic_move')
+    check('Nf3 piece N', md._parse_algebraic_move('Nf3')['piece'] == 'N')
+    check('Nf3 to f3', md._parse_algebraic_move('Nf3')['to'] == 'f3')
+    check('Nc3 piece N', md._parse_algebraic_move('Nc3')['piece'] == 'N')
+    check('Nc3 to c3', md._parse_algebraic_move('Nc3')['to'] == 'c3')
+    check('e4 piece P', md._parse_algebraic_move('e4')['piece'] == 'P')
+    check('e4 to e4', md._parse_algebraic_move('e4')['to'] == 'e4')
+    check('exd5 capture', md._parse_algebraic_move('exd5')['capture'] is True)
+    check('exd5 to d5', md._parse_algebraic_move('exd5')['to'] == 'd5')
+    check('O-O castle', md._parse_algebraic_move('O-O')['castle'] is True)
+    check('O-O piece K', md._parse_algebraic_move('O-O')['piece'] == 'K')
+    check('e8=Q promo', md._parse_algebraic_move('e8=Q')['promo'] == 'Q')
+    check('Qh4 piece Q', md._parse_algebraic_move('Qh4')['piece'] == 'Q')
 
 
 def test_geometry_ok():
@@ -329,30 +336,30 @@ def test_geometry_ok():
     check('Pawn needs board -> None', md._geometry_ok('P', 'e2', 'e4') is None)
 
 
-def test_chess_corrective_prompt():
-    print('[offline] _chess_corrective_prompt')
+def test_move_corrective_prompt():
+    print('[offline] _move_corrective_prompt')
     w, h = md._image_size(PHOTO)
     wrong = md.parse_detection(
         '{"box_2d": [487,740,536,813], "label":"source"} '
         '{"box_2d": [386,667,435,740], "label":"destination"} from: g1 to: c3',
-        'Nc3', 'chess', w, h)
-    msg = md._chess_corrective_prompt('Nc3', wrong)
+        'Nc3', 'chess', w, h, CHESS_BEHAVIOR)
+    msg = md._move_corrective_prompt('Nc3', wrong)
     check('retry for illegal knight move', msg is not None)
     check('mentions NOT a legal', 'NOT a legal' in msg, msg)
     check('mentions knight', 'knight' in msg, msg)
     right = md.parse_detection(
         '{"box_2d": [237,740,288,813], "label":"source"} '
         '{"box_2d": [289,519,338,582], "label":"destination"} from: b1 to: c3',
-        'Nc3', 'chess', w, h)
+        'Nc3', 'chess', w, h, CHESS_BEHAVIOR)
     check('no retry for legal knight move',
-          md._chess_corrective_prompt('Nc3', right) is None)
-    pawn = md.parse_detection(REPLY_E4, 'e4', 'chess', w, h)
+          md._move_corrective_prompt('Nc3', right) is None)
+    pawn = md.parse_detection(REPLY_E4, 'e4', 'chess', w, h, CHESS_BEHAVIOR)
     check('no retry for pawn move',
-          md._chess_corrective_prompt('e4', pawn) is None)
+          md._move_corrective_prompt('e4', pawn) is None)
 
 
-def test_detect_move_chess_retry_stub():
-    print('[offline] detect_move chess self-correction retry (HTTP stubbed)')
+def test_detect_move_retry_stub():
+    print('[offline] detect_move self-correction retry (HTTP stubbed)')
     WRONG = ('{"box_2d": [487,740,536,813], "label":"source"} '
              '{"box_2d": [386,667,435,740], "label":"destination"} '
              'from: g1 to: c3')
@@ -369,7 +376,8 @@ def test_detect_move_chess_retry_stub():
     orig = md._chat_completion
     md._chat_completion = fake_chat
     try:
-        det = md.detect_move('k', PHOTO, 'Nc3')
+        det = md.detect_move('k', PHOTO, 'Nc3',
+                             game_key='chess', behavior=CHESS_BEHAVIOR)
     finally:
         md._chat_completion = orig
     check('retry happened (2 API calls)', len(calls) == 2, f'{len(calls)} calls')
@@ -384,9 +392,9 @@ def test_detect_move_chess_retry_stub():
           and 'g1' in calls[-1][-2]['content'])
 
 
-def test_detect_chess_board():
-    print('[offline] _detect_chess_board (grid + square centers)')
-    board = md._detect_chess_board(PHOTO)
+def test_detect_board_grid():
+    print('[offline] _detect_board_grid (grid + square centers)')
+    board = md._detect_board_grid(PHOTO)
     check('board detected', board is not None, str(board))
     if board:
         left, top, sw, sh = board
@@ -404,7 +412,7 @@ def test_detect_chess_board():
             check(f'center {sq}',
                   abs(c[0] - exp[0]) <= 5 and abs(c[1] - exp[1]) <= 5,
                   f'{c} vs {exp}')
-    check('board cached', md._detect_chess_board(PHOTO) is board)
+    check('board cached', md._detect_board_grid(PHOTO) is board)
 
 
 def test_detect_move_box_override_stub():
@@ -412,7 +420,8 @@ def test_detect_move_box_override_stub():
     orig = md._chat_completion
     md._chat_completion = lambda *a, **k: REPLY_E4  # model boxes for e2/e4
     try:
-        det = md.detect_move('k', PHOTO, 'e4')
+        det = md.detect_move('k', PHOTO, 'e4',
+                             game_key='chess', behavior=CHESS_BEHAVIOR)
     finally:
         md._chat_completion = orig
     check('from/to from model', det.from_to == ('e2', 'e4'), str(det.from_to))
@@ -441,7 +450,8 @@ def test_live():
     print(f'  photo: {PHOTO}')
     out = '/tmp/move_detector_live_overlay.png'
     print('  sending "e4" to the Mistral API...')
-    res, path = md.detect_and_draw(api_key, PHOTO, 'e4', out)
+    res, path = md.detect_and_draw(api_key, PHOTO, 'e4', out,
+                                   game_key='chess', behavior=CHESS_BEHAVIOR)
     print('  ' + res.describe())
     print(f'  annotated photo -> {path}')
     print('  --- raw API response ---')
@@ -503,7 +513,8 @@ def test_live_knight():
 
         md._chat_completion = counting_chat
         try:
-            res = md.detect_move(api_key, PHOTO, mv)
+            res = md.detect_move(api_key, PHOTO, mv,
+                                 game_key='chess', behavior=CHESS_BEHAVIOR)
         finally:
             md._chat_completion = orig_chat
         print(f'  {mv}: {res.describe()}  (api calls: {len(calls)})')
@@ -526,7 +537,8 @@ def test_live_nc3_diag():
     # b1 center (340, 674), c3 center (406, 544).
     GT = {'b1': (340, 674), 'c3': (406, 544)}
     for i in range(2):
-        res = md.detect_move(api_key, PHOTO, 'Nc3')
+        res = md.detect_move(api_key, PHOTO, 'Nc3',
+                             game_key='chess', behavior=CHESS_BEHAVIOR)
         sp, dp = res.source_point, res.dest_point
         sp_ok = sp and abs(sp[0]-GT['b1'][0]) <= 10 and abs(sp[1]-GT['b1'][1]) <= 10
         dp_ok = dp and abs(dp[0]-GT['c3'][0]) <= 10 and abs(dp[1]-GT['c3'][1]) <= 10
@@ -552,11 +564,11 @@ def main():
     test_detect_move_from_to_stub()
     test_draw_detected_move()
     test_detect_and_draw_stub()
-    test_parse_san()
+    test_parse_algebraic_move()
     test_geometry_ok()
-    test_chess_corrective_prompt()
-    test_detect_move_chess_retry_stub()
-    test_detect_chess_board()
+    test_move_corrective_prompt()
+    test_detect_move_retry_stub()
+    test_detect_board_grid()
     test_detect_move_box_override_stub()
     test_live()
     test_live_knight()

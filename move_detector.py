@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 """
-Move detector — uses the Mistral endpoint to detect a game move on a board
-image and resolve it into a from/to (source/destination) pair.
+Move detector — uses the Mistral endpoint to detect a move on a screenshot
+and resolve it into a source/destination pair.
 
-Given a screenshot of a board game and a move written in natural / algebraic
-notation (chess example: "e4", "Nf3", "exd5", "O-O"), this module asks
-Mistral Large 4 (vision) to locate the two squares involved in the move and
-returns them both as algebraic squares (from/to) and as normalized bounding
-boxes (pixel centers included), following the object-detection recipe from the
-Mistral cookbook:
+Given a screenshot and a move description, this module asks Mistral Large 4
+(vision) to locate the objects involved in the move and returns them as
+normalized bounding boxes (pixel centers included), following the
+object-detection recipe from the Mistral cookbook:
 
     mistral/image_understanding/bbox_getstarted
 
@@ -26,11 +24,11 @@ Output format (per the cookbook): {"box_2d": [xmin, ymin, xmax, ymax],
 "label": string}, coordinates normalized 0-999 (0 = left/top edge of the
 image, 999 = right/bottom edge).
 
-Prompts are loaded from prompts.json via prompt_loader (shared with
-mistral_client and gui). The Mistral HTTP endpoint is called with the
-standard library (urllib) only, so it has no third-party dependency. PIL is
-used to read the image size and to draw the move overlay; it is optional for
-detection (required only when drawing).
+Prompts and behaviour config are loaded from prompts.json via prompt_loader.
+The Mistral HTTP endpoint is called with the standard library (urllib) only,
+so it has no third-party dependency. PIL is used to read the image size and
+to draw the move overlay; it is optional for detection (required only when
+drawing).
 
 It can also SHOW the move on the picture: pass overlay_path=... to
 detect_move (or use detect_and_draw / the CLI) and it draws the source box,
@@ -39,7 +37,6 @@ image.
 
 Run as a script (detects the move and writes an annotated picture):
     python3 move_detector.py <image_path> <move> [api_key] [overlay_out.png]
-    MISTRAL_API_KEY=sk-... python3 move_detector.py chess_start_large.png e4
 """
 
 from __future__ import annotations
@@ -58,7 +55,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from prompt_loader import get_detector_system_prompt, build_detector_user_prompt
+from prompt_loader import get_detector_system, build_detector_user_prompt
 
 MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
 MODEL = "mistral-large-4"
@@ -75,34 +72,34 @@ _RESULT_DICT = re.compile(
     r'\{(?=[^{}]*\b(?:box_2d|point_2d)\b)(?=[^{}]*\blabel\b)[^{}]*\}'
 )
 
-# A chess square in algebraic notation: file a-h, rank 1-8.
+# A square in algebraic notation: file a-h, rank 1-8.
 _SQUARE = r'[a-hA-H][1-8]'
 
 
 # ── Prompts (loaded from prompts.json via prompt_loader) ────────────
 
-def build_system_prompt(game: str = "chess") -> str:
-    """System prompt loaded from prompts.json (detector.system.<game>)."""
-    return get_detector_system_prompt(game)
+def build_system_prompt(game_key: str = "default") -> str:
+    """System prompt loaded from prompts.json (detector.system.<game_key>)."""
+    return get_detector_system(game_key)
 
 
-def build_user_prompt(move: str, game: str = "chess",
+def build_user_prompt(move: str, game_key: str = "default",
                       img_w: Optional[int] = None,
                       img_h: Optional[int] = None) -> str:
     """User prompt built from the template in prompts.json
-    (detector.user_template.<game>) with {game}, {move}, {size} substituted."""
-    return build_detector_user_prompt(move, game, img_w, img_h)
+    (detector.user_template.<game_key>) with {game}, {move}, {size} substituted."""
+    return build_detector_user_prompt(move, game_key, img_w, img_h)
 
 
 # ── Result type ─────────────────────────────────────────────────────────────
 
 @dataclass
 class DetectedMove:
-    """A detected game move resolved into a from/to pair."""
-    move: str                       # the input move text, e.g. "e4"
-    game: str                       # e.g. "chess"
-    from_square: Optional[str]      # algebraic source, e.g. "e2" (chess only)
-    to_square: Optional[str]        # algebraic destination, e.g. "e4" (chess only)
+    """A detected move resolved into a source/destination pair."""
+    move: str                       # the input move text
+    game_key: str                   # game key from prompts.json
+    from_square: Optional[str]      # algebraic source square (board games)
+    to_square: Optional[str]        # algebraic destination square (board games)
     source_box: Optional[tuple]     # normalized (xmin, ymin, xmax, ymax) 0-999
     dest_box: Optional[tuple]       # normalized (xmin, ymin, xmax, ymax) 0-999
     source_point: Optional[tuple]   # pixel (x, y) center of the source box
@@ -110,7 +107,7 @@ class DetectedMove:
     image_size: Optional[tuple]     # (width, height) of the image in pixels
     raw: str                        # raw model reply
     overlay_path: Optional[str] = None  # annotated picture, if one was drawn
-    description: Optional[str] = None   # natural-language move desc (non-chess)
+    description: Optional[str] = None   # natural-language move desc (non-board games)
 
     @property
     def from_to(self) -> tuple:
@@ -328,7 +325,7 @@ def extract_squares(text_content: str) -> Optional[tuple[str, str]]:
 
 
 def extract_description(text_content: str) -> Optional[str]:
-    """Extract the move description line (non-chess games).
+    """Extract the move description line.
 
     Looks for 'move: <description>' lines. Returns None if not found.
     """
@@ -346,13 +343,22 @@ def _box_center_px(box: tuple, w: int, h: int) -> tuple[int, int]:
     return (round((x1 + x2) / 2 / 1000 * w), round((y1 + y2) / 2 / 1000 * h))
 
 
-def parse_detection(raw: str, move: str, game: str,
-                    img_w: Optional[int], img_h: Optional[int]) -> DetectedMove:
-    """Parse a model reply into a DetectedMove."""
+def parse_detection(raw: str, move: str, game_key: str,
+                    img_w: Optional[int], img_h: Optional[int],
+                    behavior: Optional[dict] = None) -> DetectedMove:
+    """Parse a model reply into a DetectedMove.
+
+    behavior: dict from the prompt's 'behavior' config. When
+    behavior['move_format'] is 'algebraic' or 'squares', the reply is
+    expected to contain from/to square lines; otherwise a natural-language
+    description line is extracted.
+    """
+    behavior = behavior or {}
+    move_format = behavior.get("move_format")
+    has_squares = move_format in ("algebraic", "squares")
     boxes = extract_boxes(raw)
-    is_board_game = game in ("chess", "checkers", "draughts")
-    squares = extract_squares(raw) if is_board_game else None
-    description = None if is_board_game else extract_description(raw)
+    squares = extract_squares(raw) if has_squares else None
+    description = None if has_squares else extract_description(raw)
     source_box = boxes['source'] if boxes else None
     dest_box = boxes['dest'] if boxes else None
     source_point = dest_point = None
@@ -362,7 +368,7 @@ def parse_detection(raw: str, move: str, game: str,
         dest_point = _box_center_px(dest_box, img_w, img_h)
     return DetectedMove(
         move=move,
-        game=game,
+        game_key=game_key,
         from_square=squares[0] if squares else None,
         to_square=squares[1] if squares else None,
         source_box=source_box,
@@ -431,7 +437,7 @@ def draw_detected_move(image_path: str, det: DetectedMove,
         draw.ellipse([sx - r, sy - r, sx + r, sy + r], fill=MOVE_COLOR)
         draw.ellipse([dx - r, dy - r, dx + r, dy + r], fill=MOVE_COLOR)
 
-    # labels: from/to squares (chess) or description (other games)
+    # labels: from/to squares or description
     if det.source_box and det.from_square:
         bx1, by1, _, _ = _box_to_px(det.source_box, w, h)
         draw.text((bx1, max(0, by1 - 14)), f"from {det.from_square}",
@@ -442,37 +448,38 @@ def draw_detected_move(image_path: str, det: DetectedMove,
                   fill=(255, 255, 255))
     if det.from_square and det.to_square:
         draw.text((8, 8),
-                  f"{det.game}: {det.move}  {det.from_square} -> "
+                  f"{det.game_key}: {det.move}  {det.from_square} -> "
                   f"{det.to_square}", fill=(255, 255, 255))
     elif det.description:
         draw.text((8, 8),
-                  f"{det.game}: {det.move}  ({det.description})",
+                  f"{det.game_key}: {det.move}  ({det.description})",
                   fill=(255, 255, 255))
 
     img.save(out_path)
     return out_path
 
 
-# ── Chess self-correction (deterministic legality check + retry) ─────────────
+# ── Move self-correction (deterministic geometry check + retry) ──────────────
 #
-# A move like "Nf3" does not name the source square — several knights may
-# exist, so the model must read the board to pick the one that can legally
-# reach the destination. Models sometimes guess the wrong source (e.g. report
-# g1 for "Nc3", but g1 -> c3 is not a legal knight move). To make detection
-# reliable we validate the reported source -> destination against the move's
-# geometry (no board needed) and, if it is illegal, ask the model to re-examine
-# the board and try again.
+# A move like "Nf3" does not name the source square — several pieces of the
+# same type may exist, so the model must read the board to pick the one that
+# can legally reach the destination. Models sometimes guess the wrong source.
+# To make detection reliable we validate the reported source -> destination
+# against the move's geometry (no board needed) and, if it is inconsistent,
+# ask the model to re-examine the board and try again.
+#
+# Enabled by behavior['validate_move'] = true in prompts.json.
 
 _PIECE_NAMES = {'N': 'knight', 'B': 'bishop', 'R': 'rook',
                 'Q': 'queen', 'K': 'king'}
 
 
-def _parse_san(move: str) -> dict:
-    """Parse a chess move in SAN-like notation into its components.
+def _parse_algebraic_move(move: str) -> dict:
+    """Parse a move in algebraic notation into its components.
 
     Returns {'piece': 'N'|'B'|'R'|'Q'|'K'|'P', 'capture': bool, 'to': 'e4',
     'castle': bool, 'promo': str|None}. Only geometry-relevant parts are
-    extracted; this is NOT a full chess rules engine.
+    extracted; this is NOT a full rules engine.
     """
     s = move.strip()
     if s in ('O-O', '0-0', 'O-O-O', '0-0-0'):
@@ -524,10 +531,10 @@ def _geometry_ok(piece: str, frm: str, to: str) -> Optional[bool]:
     return None  # pawn / unknown — needs the board
 
 
-def _chess_corrective_prompt(move: str, det: DetectedMove) -> Optional[str]:
+def _move_corrective_prompt(move: str, det: DetectedMove) -> Optional[str]:
     """If the model's from/to is not a legal move for the piece, build a
     corrective follow-up message; otherwise return None (no retry needed)."""
-    info = _parse_san(move)
+    info = _parse_algebraic_move(move)
     piece = info['piece']
     if piece not in _PIECE_NAMES:
         return None
@@ -553,19 +560,18 @@ def _chess_corrective_prompt(move: str, det: DetectedMove) -> Optional[str]:
     return None
 
 
-# ── Board detection (deterministic square pixel boxes for chess) ────────────
+# ── Board grid detection (deterministic pixel boxes for grid-based games) ───
 #
 # The model reliably resolves the from/to SQUARES (with the legality retry),
-# but it often mis-localizes a square's pixel box (e.g. it placed the Nc3
-# destination box on c2 instead of c3). So for chess we detect the 8x8 board
-# grid straight from the image (its regular alternating-square edges) and
-# compute the square pixel boxes ourselves, overriding the model's boxes.
+# but it often mis-localizes a square's pixel box. So when behavior['board_grid']
+# is true, we detect the regular grid straight from the image (its evenly-spaced
+# edges) and compute the square pixel boxes ourselves, overriding the model's boxes.
 
 _BOARD_CACHE: dict = {}
 
 
 def _find_grid_lines(strength: list) -> Optional[list]:
-    """Find 9 evenly-spaced strong peaks (the boundaries of 8 squares).
+    """Find 9 evenly-spaced strong peaks (the boundaries of 8 cells).
 
     RANSAC-style: search for the spacing/offset whose 9 expected positions
     (start + k*spacing, k=0..8) match the most peaks (>=7). Returns the 9
@@ -609,9 +615,9 @@ def _find_grid_lines(strength: list) -> Optional[list]:
     return bounds[:9]
 
 
-def _detect_chess_board(image_path: str) -> Optional[tuple]:
-    """Detect the 8x8 chess board grid. Returns (left, top, sq_w, sq_h) in
-    pixels, or None if no regular grid is found. Cached per image path."""
+def _detect_board_grid(image_path: str) -> Optional[tuple]:
+    """Detect an 8x8 grid on the image. Returns (left, top, cell_w, cell_h)
+    in pixels, or None if no regular grid is found. Cached per image path."""
     key = os.path.abspath(image_path)
     if key in _BOARD_CACHE:
         return _BOARD_CACHE[key]
@@ -622,13 +628,13 @@ def _detect_chess_board(image_path: str) -> Optional[tuple]:
         W, H = img.size
         gray = list(img.getdata())  # ints 0-255, length W*H
 
-        gx = [0.0] * (W - 1)  # vertical-edge strength per column (file lines)
+        gx = [0.0] * (W - 1)  # vertical-edge strength per column
         for y in range(H):
             base = y * W
             row = gray[base:base + W]
             for x in range(W - 1):
                 gx[x] += abs(row[x + 1] - row[x])
-        gy = [0.0] * (H - 1)  # horizontal-edge strength per row (rank lines)
+        gy = [0.0] * (H - 1)  # horizontal-edge strength per row
         for y in range(H - 1):
             base = y * W
             nxt = base + W
@@ -642,7 +648,7 @@ def _detect_chess_board(image_path: str) -> Optional[tuple]:
             top, bottom = by[0], by[-1]
             sq_w = (right - left) / 8.0
             sq_h = (bottom - top) / 8.0
-            # sanity: a board is large and roughly square
+            # sanity: cells are reasonably sized and roughly square
             if 20 <= sq_w <= 400 and 20 <= sq_h <= 400 and \
                     abs(sq_w - sq_h) <= 0.25 * max(sq_w, sq_h):
                 result = (left, top, sq_w, sq_h)
@@ -677,33 +683,40 @@ def _px_box_center(box_px: tuple) -> tuple:
 # ── Public API ──────────────────────────────────────────────────────────────
 
 def detect_move(api_key: str, image_path: str, move: str,
-                game: str = "chess", model: str = MODEL,
+                game_key: str = "default", behavior: Optional[dict] = None,
+                model: str = MODEL,
                 temperature: float = 0.0,
                 reasoning_effort: str = "none",
                 overlay_path: Optional[str] = None) -> DetectedMove:
     """
-    Detect a game move on a board image using the Mistral endpoint.
+    Detect a move on a screenshot using the Mistral endpoint.
 
-    Sends the screenshot and the move (e.g. "e4") to Mistral Large 4 and
-    resolves it into a from/to pair: the source square (piece being moved)
-    and the destination square, returned both in algebraic notation and as
-    normalized bounding boxes (with pixel centers).
+    Sends the screenshot and the move to Mistral Large 4 and resolves it
+    into source/destination bounding boxes (with pixel centers).
 
     api_key:         Mistral API key.
-    image_path:      path to the board screenshot (PNG/JPEG/...).
-    move:            the move to detect, e.g. "e4", "Nf3", "exd5", "O-O".
-    game:            game name (default "chess"); used in the prompts.
+    image_path:      path to the screenshot (PNG/JPEG/...).
+    move:            the move to detect.
+    game_key:        key into prompts.json detector.system / detector.user_template.
+    behavior:        dict from the prompt's 'behavior' config. Recognised keys:
+                       action        — "drag" or "click" (informational)
+                       grab_y        — grab at this fraction of source box height
+                       board_grid    — detect a regular grid and compute exact boxes
+                       validate_move — validate reported source→dest geometry and retry
+                       move_format   — "algebraic" or "squares" (expect from/to lines)
+                       right_click_word — word in move text that means right-click
     model:           Mistral model (default mistral-large-4).
     temperature:     sampling temperature (default 0 = greedy).
-    reasoning_effort: Mistral reasoning level — "none" (default, no
-                     chain-of-thought), "low", "medium", or "high".
-    overlay_path:    if given, draw the detected move (source/destination
-                     boxes + drag arrow) on the picture and save it here.
+    reasoning_effort: Mistral reasoning level — "none" (default), "low",
+                     "medium", or "high".
+    overlay_path:    if given, draw the detected move on the picture and save it.
 
-    For chess, the reported source -> destination is checked against the
-    move's geometry; if it is illegal (e.g. a knight move whose source was
-    not in the notation), the model is asked to re-examine the board and
-    retry (up to 2 times).
+    When behavior['validate_move'] is true, the reported source -> destination
+    is checked against the move's geometry; if inconsistent, the model is asked
+    to re-examine the board and retry (up to 2 times).
+
+    When behavior['board_grid'] is true and from/to squares are resolved,
+    the pixel boxes are recomputed from the detected grid for accuracy.
 
     Returns a DetectedMove (with .overlay_path set when a picture was drawn).
     Raises RuntimeError on API/transport errors.
@@ -711,38 +724,38 @@ def detect_move(api_key: str, image_path: str, move: str,
     if not api_key:
         raise ValueError("api_key is required (set MISTRAL_API_KEY)")
     if not move or not move.strip():
-        raise ValueError("move is required (e.g. 'e4')")
+        raise ValueError("move is required")
 
+    behavior = behavior or {}
     mv = move.strip()
     img_w, img_h = _image_size(image_path)
     image_b64, mime_type = _encode_image(image_path)
-    system_prompt = build_system_prompt(game)
-    user_prompt = build_user_prompt(mv, game, img_w, img_h)
+    system_prompt = build_system_prompt(game_key)
+    user_prompt = build_user_prompt(mv, game_key, img_w, img_h)
     messages = [_msg_system(system_prompt),
                 _msg_user_image(user_prompt, image_b64, mime_type)]
     raw = _chat_completion(api_key, messages, model, temperature, reasoning_effort)
-    det = parse_detection(raw, mv, game, img_w, img_h)
+    det = parse_detection(raw, mv, game_key, img_w, img_h, behavior)
 
-    # Chess self-correction: if the reported source -> destination is not a
-    # legal move for the piece (e.g. a knight whose source was not in the
-    # notation), ask the model to re-examine the board and try again.
-    if game == "chess":
+    # Move self-correction: if the reported source -> destination is not a
+    # legal move for the piece, ask the model to re-examine the board.
+    if behavior.get("validate_move"):
         for _ in range(2):
-            corrective = _chess_corrective_prompt(mv, det)
+            corrective = _move_corrective_prompt(mv, det)
             if corrective is None:
                 break
             messages.append(_msg_assistant(raw))
             messages.append(_msg_user_text(corrective))
             raw = _chat_completion(api_key, messages, model, temperature,
                                    reasoning_effort)
-            det = parse_detection(raw, mv, game, img_w, img_h)
+            det = parse_detection(raw, mv, game_key, img_w, img_h, behavior)
 
-    # For chess, recompute the pixel boxes from the detected board grid: the
-    # model reliably gets the from/to squares (verified above) but often
-    # mis-localizes a square's pixel box (e.g. Nc3's destination landed on c2).
-    # The detected grid gives exact, consistent boxes for both squares.
-    if game == "chess" and det.from_square and det.to_square and img_w and img_h:
-        board = _detect_chess_board(image_path)
+    # When a board grid is expected, recompute the pixel boxes from the
+    # detected grid: the model reliably gets the from/to squares (verified
+    # above) but often mis-localizes a square's pixel box.
+    if behavior.get("board_grid") and det.from_square and det.to_square \
+            and img_w and img_h:
+        board = _detect_board_grid(image_path)
         if board:
             sb_px = _square_px_box(board, det.from_square)
             db_px = _square_px_box(board, det.to_square)
@@ -758,23 +771,27 @@ def detect_move(api_key: str, image_path: str, move: str,
 
 
 def detect_move_from_to(api_key: str, image_path: str, move: str,
-                        game: str = "chess", model: str = MODEL) -> tuple:
+                        game_key: str = "default", behavior: Optional[dict] = None,
+                        model: str = MODEL) -> tuple:
     """
-    Convenience wrapper: detect a move and return (from_square, to_square),
-    e.g. ("e2", "e4"). Either may be None if the model could not resolve it.
+    Convenience wrapper: detect a move and return (from_square, to_square).
+    Either may be None if the model could not resolve it.
     """
-    return detect_move(api_key, image_path, move, game=game, model=model).from_to
+    return detect_move(api_key, image_path, move, game_key=game_key,
+                       behavior=behavior, model=model).from_to
 
 
 def detect_and_draw(api_key: str, image_path: str, move: str,
-                    out_path: str, game: str = "chess", model: str = MODEL,
+                    out_path: str, game_key: str = "default",
+                    behavior: Optional[dict] = None, model: str = MODEL,
                     temperature: float = 0.0,
                     reasoning_effort: str = "none") -> tuple[DetectedMove, str]:
     """
     Detect a move and draw it on the picture in one call.
     Returns (DetectedMove, out_path).
     """
-    det = detect_move(api_key, image_path, move, game=game, model=model,
+    det = detect_move(api_key, image_path, move, game_key=game_key,
+                      behavior=behavior, model=model,
                       temperature=temperature, reasoning_effort=reasoning_effort,
                       overlay_path=out_path)
     return det, out_path
