@@ -2,10 +2,9 @@
 """
 Live Mistral API test — the real chess photo.
 
-Sends chess_start.png (Stockfish, starting position, White to move) to the
-Mistral API with the chess prompt and the actions output format, prints the
-raw reply, parses the actions, and draws the move (source/destination boxes
-+ drag arrow) over the screenshot.
+Two-step flow: sends chess_start.png to Mistral for the best move (text),
+then uses move_detector to resolve it into source/destination pixel
+coordinates, and draws the move over the screenshot.
 
 Run:   python3 test_chess_photo.py            (with MISTRAL_API_KEY exported)
        MISTRAL_API_KEY=sk-... python3 test_chess_photo.py
@@ -20,8 +19,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from PIL import Image
 
-from move_parser import extract_boxes, extract_centers, parse_move_actions
-from mistral_client import CHESS_PROMPT, ask_best_move, image_size
+from move_parser import Action, extract_move_text
+from move_detector import detect_move
+from mistral_client import CHESS_PROMPT, ask_best_move
 from overlay import MOVE_COLOR, draw_move_overlay
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -39,32 +39,36 @@ if not api_key:
     sys.exit(1)
 
 print(f'Photo: {PHOTO}')
-print('Sending to the Mistral API (chess prompt, actions format)...')
-print()
-response = ask_best_move(api_key, PHOTO, want_actions=True, prompt=CHESS_PROMPT)
 
+# Step 1: ask for the best move (text only)
+print('Step 1: Asking Mistral for the best move...')
+response = ask_best_move(api_key, PHOTO, prompt=CHESS_PROMPT)
 print('--- raw API response ---')
 print(response)
 print('--- end of raw response ---')
 print()
 
-img_w, img_h = image_size(PHOTO)
-actions = parse_move_actions(response, img_w, img_h)
-assert actions, 'the API response parsed to no actions'
+move_text = extract_move_text(response, game='chess')
+print(f'Extracted move: {move_text!r}')
+assert move_text, 'no move extracted from the response'
+
+# Step 2: detect the move on the board for pixel coordinates
+print('Step 2: Detecting move on the board...')
+det = detect_move(api_key, PHOTO, move_text, game='chess')
+print(det.describe())
+assert det.source_point and det.dest_point, 'move_detector returned no pixel coordinates'
+
+# Build a drag action and draw the overlay
+sx, sy = det.source_point
+dx, dy = det.dest_point
+actions = [Action(type='drag', x1=sx, y1=sy, x2=dx, y2=dy,
+                  raw=f'{det.from_square} -> {det.to_square}')]
 for a in actions:
-    print('parsed action:', a.describe())
+    print('action:', a.describe())
 
-centers = extract_centers(response)
-if centers:
-    print('centers:', centers)
-boxes = extract_boxes(response)
-if boxes:
-    print('boxes:', boxes)
-
-# draw the move (source/destination boxes + drag arrow) over the screenshot
 out = draw_move_overlay(
     PHOTO, os.path.join(tempfile.gettempdir(), 'chess_photo_overlay_live.png'),
-    actions, boxes)
+    actions, None)
 drag = next((a for a in actions
              if a.type == 'drag' and a.x1 is not None), None)
 if drag is not None:

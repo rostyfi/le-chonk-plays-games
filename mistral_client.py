@@ -50,46 +50,23 @@ ADVICE_SUFFIX = (
     "response must state the best move in one sentence — nothing may come after it."
 )
 
-# CHESS_PROMPT = (
-#     "This is a game of CHESS. "
-#     "First, describe the board exactly as you see it: an 8x8 grid of squares. "
-#     "For every occupied square, give its coordinate (file a-h, rank 1-8 — use "
-#     "the labels if the board shows them; otherwise describe the square by "
-#     "position, e.g. 'the top-left square') and the piece on it (white or black "
-#     "King, Queen, Rook, Bishop, Knight, or Pawn). "
-#     "State which side is to move (White or Black). "
-#     "Note castling rights (which Kings and Rooks have not yet moved) and any "
-#     "en passant target square, if visible. "
-#     "Do NOT guess or invent pieces you cannot see. "
-#     "If you are unsure about a square, say so. "
-#     "If the board is not fully visible, describe only what you can see. "
-#     "COORDINATE PROTOCOL — follow it exactly when reporting pixel positions: "
-#     "The image may contain extra UI around the board (clocks, move lists, "
-#     "buttons, player names, panels) — IGNORE everything outside the 8x8 "
-#     "checkerboard; it is not part of the board. "
-#     "Step 1: locate the board — the square-shaped 8x8 grid of alternating "
-#     "light and dark squares — and state its pixel bounds: the left, top, "
-#     "right and bottom edges of the outermost squares, and the width of one "
-#     "square in pixels. "
-#     "Step 2: compute the pixel center of any square <file><rank> with this "
-#     "exact formula: x = board_left + (file_number + 0.5) * square_width, "
-#     "y = board_top + (8 - rank + 0.5) * square_height, where file_number is "
-#     "a=0, b=1, c=2, d=3, e=4, f=5, g=6, h=7. Do not estimate — measure the "
-#     "board edges and compute. "
-#     "Step 3: report those computed pixel centers in the CENTERS section. "
-#     "Coordinates are always in the WHOLE image: if the board does not fill "
-#     "the image, the formula already includes the board's offset — never "
-#     "report coordinates relative to the board or to any sub-region. "
-#     "Then, based ONLY on the visible board, what is the single best legal move? "
-#     "Chess rules: standard piece movement; never suggest an illegal move; "
-#     "consider checks, captures, threats, and king safety. "
-#     "State the move using algebraic notation (e.g. 'Nf3', 'exd5', 'O-O'). "
-#     "If NO legal move exists, say 'No moves available.' "
-#     "If the best move is a pawn promotion, say which piece to promote to and "
-#     "add a 'CLICK at (x, y)' on the promotion piece in the ACTION block "
-#     "(it runs after the DRAG). "
-# )
-CHESS_PROMPT = ("What's the best chess move?")
+CHESS_PROMPT = (
+    "This is a game of CHESS. "
+    "First, describe the board exactly as you see it: an 8x8 grid of squares. "
+    "For every occupied square, give its coordinate (file a-h, rank 1-8) "
+    "and the piece on it (white or black King, Queen, Rook, Bishop, Knight, "
+    "or Pawn). State which side is to move (White or Black). "
+    "Do NOT guess or invent pieces you cannot see. "
+    "If you are unsure about a square, say so. "
+    "Then, based ONLY on the visible board, what is the single best legal move? "
+    "Chess rules: standard piece movement; never suggest an illegal move; "
+    "consider checks, captures, threats, and king safety. "
+    "State the move using algebraic notation (e.g. 'Nf3', 'exd5', 'O-O'). "
+    "If NO legal move exists, say 'No moves available.' "
+    "If the best move is a pawn promotion, say which piece to promote to. "
+    "Do NOT report pixel coordinates or bounding boxes — only the move in "
+    "algebraic notation."
+)
 
 def encode_image(image_path: str) -> tuple[str, str]:
     """Encode image to base64. Returns (base64, mime_type)."""
@@ -190,86 +167,11 @@ def _call_api(api_key: str, image_path: str, user_prompt: str, model: str) -> st
     return text
 
 
-def _actions_suffix(image_path: str) -> str:
-    """Output-format contract appended when the move must be executable.
-
-    Structured after the Mistral cookbook's object-detection prompt
-    (mistral/image_understanding/bbox_getstarted): a short objective, the
-    box_2d task definition, the standardized response format with a
-    concrete example, and free generation — the dictionaries are parsed
-    afterwards with a regex, like the cookbook's extract_results.
-    """
-    w, h = image_size(image_path)
-    size_note = f"The screenshot is {w}x{h} pixels. " if w and h else ""
-    return (
-        "You may briefly explain your reasoning. "
-        "You are an object-detection vision model for a game-playing "
-        "agent. Given a game screenshot, output the bounding boxes of the "
-        "two objects that define the next move: the object to grab (label "
-        "'source') and the destination (label 'destination'). "
-        "If an object is not present, reply with NONE. "
-        + size_note
-        + "Use pixel coordinates in this image: (0,0) is the TOP-LEFT corner, "
-        "x grows to the right, y grows downward. "
-        "Coordinates are always in the WHOLE image — if the game area does "
-        "not fill the image (panels, clocks, or margins around it), include "
-        "that offset; never report coordinates relative to the game area or "
-        "a sub-region. "
-        "# Task\n"
-        "box_2d: detect the bounding box of each object requested, with 4 "
-        "coordinates [xmin, ymin, xmax, ymax]. "
-        "Bracket the objects tightly: the 'source' box is the card or piece "
-        "to grab (if moving a sequence, the TOP card of the sequence); the "
-        "'destination' box is the destination (the TOP card of the "
-        "destination pile, or the empty destination square/placeholder). "
-        "# Response format\n"
-        "Reply with a list of dictionaries in this standardized format, in "
-        "a BOXES section with exactly two boxes, one per line: "
-        'BOXES:\n{"box_2d": [xmin, ymin, xmax, ymax], "label": "source"}\n'
-        '{"box_2d": [xmin, ymin, xmax, ymax], "label": "destination"} '
-        "Example — the boxes "
-        '{"box_2d": [421, 607, 458, 661], "label": "source"} and '
-        '{"box_2d": [421, 496, 458, 550], "label": "destination"} '
-        "bracket the objects whose pixel centers are (584, 562) and "
-        "(584, 464) in a 1329x887 image. "
-        "Every coordinate must be normalized between 0 and 1000 (valid "
-        "range 0-999: 0 = left/top edge of the image, 999 = right/bottom "
-        "edge). "
-        "For exact execution, also compute the PIXEL CENTER of each of "
-        "the two move endpoints (the exact points where the DRAG should "
-        "start and end) and report them in a CENTERS section, in PIXEL "
-        "coordinates of this image, in this format: "
-        'CENTERS:\nsource: (584, 562)\ndest: (584, 464) '
-        "Compute the pixel coordinates carefully — the DRAG will go from "
-        "the source center to the dest center, used EXACTLY as written. "
-        "If the move needs no DRAG (e.g. only clicking the stock pile), "
-        "write 'CENTERS: NONE' and 'BOXES: NONE'. "
-        "Then include an ACTION block with any remaining commands — do NOT "
-        "write a DRAG in it (the DRAG is computed from the CENTERS; only if "
-        "you cannot provide centers, write "
-        "'DRAG from (x1, y1) to (x2, y2)' with pixel coordinates as a "
-        "fallback): a line reading 'ACTION:' followed by ONE COMMAND PER "
-        "LINE, using EXACTLY this syntax — "
-        "'CLICK at (x, y)' to click something (a pile, button, or piece); "
-        "'DOUBLE_CLICK at (x, y)' to double-click something (e.g. a card to "
-        "send it to a foundation); "
-        "'WAIT <seconds>' to pause between commands. "
-        "If there are no remaining commands, or no move is possible, write "
-        "'ACTION:' followed by 'NONE' on the next line. "
-        "Write each section (CENTERS, BOXES, ACTION) exactly once — do not "
-        "repeat them. "
-        "After the CENTERS, BOXES and ACTION sections, leave one blank line. "
-        "The LAST sentence of your response must state the best move in one "
-        "sentence — nothing may come after it."
-    )
-
-
 def ask_best_move(
     api_key: str,
     image_path: str,
     game_hint: str = None,
     history: list[str] = None,
-    want_actions: bool = False,
     prompt: str = None,
 ) -> str:
     """
@@ -278,11 +180,9 @@ def ask_best_move(
 
     prompt: custom base prompt text (e.g. from the app's prompt library).
         If None, the built-in BASE_PROMPT is used.
-    want_actions: append the ACTION-block output contract so move_parser can
-        execute the move automatically. The move is still the LAST sentence.
     """
     text = prompt if prompt is not None else BASE_PROMPT
-    text += _actions_suffix(image_path) if want_actions else ADVICE_SUFFIX
+    text += ADVICE_SUFFIX
     if history:
         text = "Previous moves:\n" + "\n".join(f"  {h}" for h in history) + "\n\n" + text
 

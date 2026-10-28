@@ -105,7 +105,6 @@ def play_one_move(
     response = ask_best_move(
         api_key, image_path,
         game_hint=game_hint, history=history,
-        want_actions=False,
     )
 
     if verbose:

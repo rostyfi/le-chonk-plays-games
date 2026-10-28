@@ -493,7 +493,6 @@ class AdvisorWindow(Gtk.ApplicationWindow):
             advice = ask_best_move(
                 self.api_key, tmp_path,
                 game_hint="chess",
-                want_actions=False,
                 prompt=prompt_text,
             )
 
