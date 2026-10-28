@@ -367,11 +367,14 @@ class AdvisorWindow(Gtk.ApplicationWindow):
     def _detect_game(self) -> str:
         """Detect the game from the active prompt title.
 
-        Returns 'checkers' if the title contains 'checkers' or 'draughts',
+        Returns 'minesweeper' if the title contains 'minesweeper',
+        'checkers' if it contains 'checkers' or 'draughts',
         'solitaire' if it contains 'solitaire' or 'klondike',
         otherwise 'chess' (default).
         """
         title = (self._active_prompt or "").lower()
+        if "minesweeper" in title:
+            return "minesweeper"
         if "checkers" in title or "draughts" in title:
             return "checkers"
         if "solitaire" in title or "klondike" in title:
@@ -668,10 +671,19 @@ class AdvisorWindow(Gtk.ApplicationWindow):
                         box_top = det.source_box[1] / 1000 * ih
                         box_h = (det.source_box[3] - det.source_box[1]) / 1000 * ih
                         sy = int(box_top + box_h * 0.8)
-                    actions.append(Action(
-                        type='drag', x1=sx, y1=sy, x2=dx, y2=dy,
-                        raw=f"move_detector: {det.description or det.from_square}",
-                    ))
+                    # For Minesweeper: single click (left=reveal, right=flag)
+                    if game == "minesweeper":
+                        is_flag = "flag" in move_text.lower()
+                        actions.append(Action(
+                            type='right_click' if is_flag else 'click',
+                            x1=sx, y1=sy,
+                            raw=f"move_detector: {det.description or move_text}",
+                        ))
+                    else:
+                        actions.append(Action(
+                            type='drag', x1=sx, y1=sy, x2=dx, y2=dy,
+                            raw=f"move_detector: {det.description or det.from_square}",
+                        ))
 
             if actions:
                 self._last_move = {

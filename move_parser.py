@@ -44,6 +44,8 @@ class Action:
             return f"DRAG ({self.x1},{self.y1}) -> ({self.x2},{self.y2})"
         elif self.type == 'click':
             return f"CLICK ({self.x1},{self.y1})"
+        elif self.type == 'right_click':
+            return f"RIGHT_CLICK ({self.x1},{self.y1})"
         elif self.type == 'double_click':
             return f"DOUBLE_CLICK ({self.x1},{self.y1})"
         elif self.type == 'key':
@@ -240,11 +242,15 @@ PATTERNS = {
         re.IGNORECASE
     ),
     'click': re.compile(
-        r'(?<!DOUBLE[\s_])CLICK(?:\s+(?:at|on|on\s+the))?\s*\(?\s*(\d+)\s*[, ]\s*(\d+)\s*\)?',
+        r'(?<!DOUBLE[\s_])(?<!RIGHT[\s_])CLICK(?:\s+(?:at|on|on\s+the))?\s*\(?\s*(\d+)\s*[, ]\s*(\d+)\s*\)?',
         re.IGNORECASE
     ),
     'double_click': re.compile(
         r'DOUBLE[\s_]?CLICK(?:\s+(?:at|on))?\s*\(?\s*(\d+)\s*[, ]\s*(\d+)\s*\)?',
+        re.IGNORECASE
+    ),
+    'right_click': re.compile(
+        r'RIGHT[\s_]?CLICK(?:\s+(?:at|on))?\s*\(?\s*(\d+)\s*[, ]\s*(\d+)\s*\)?',
         re.IGNORECASE
     ),
     'key': re.compile(
@@ -380,7 +386,15 @@ def parse_actions(response: str) -> list[Action]:
                 raw=line
             )
         else:
-            m = PATTERNS['drag'].search(line)
+            m = PATTERNS['right_click'].search(line)
+            if m:
+                action = Action(
+                    type='right_click',
+                    x1=int(m.group(1)), y1=int(m.group(2)),
+                    raw=line
+                )
+            else:
+                m = PATTERNS['drag'].search(line)
             if m:
                 action = Action(
                     type='drag',
@@ -462,6 +476,10 @@ def execute_actions(actions: list[Action], dry_run: bool = False,
 
             elif action.type == 'click':
                 inp.click(action.x1, action.y1)
+
+            elif action.type == 'right_click':
+                from input_controller import Button3
+                inp.click(action.x1, action.y1, button=Button3)
 
             elif action.type == 'double_click':
                 inp.click(action.x1, action.y1, double=True)

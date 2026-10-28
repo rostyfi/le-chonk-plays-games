@@ -95,6 +95,8 @@ def build_system_prompt(game: str = "chess") -> str:
         return _build_solitaire_system_prompt(game)
     if "checkers" in g or "draughts" in g:
         return _build_checkers_system_prompt(game)
+    if "minesweeper" in g:
+        return _build_minesweeper_system_prompt(game)
     return _build_chess_system_prompt(game)
 
 
@@ -209,6 +211,36 @@ def _build_checkers_system_prompt(game: str) -> str:
     )
 
 
+def _build_minesweeper_system_prompt(game: str) -> str:
+    """Minesweeper system prompt: locate a single cell, report its bounding box.
+    Source and destination are the same box (single click)."""
+    return (
+        "You are an object-detection vision model for a game-playing agent. "
+        f"The game is {game} (Minesweeper). "
+        "Objective: given a screenshot and an action (e.g. 'Reveal cell col 3 "
+        "row 5' or 'Flag cell col 7 row 2'), locate the single CELL on the "
+        "grid that should be clicked. "
+        "Task — box_2d only: report the bounding box of that cell as 4 "
+        "coordinates [xmin, ymin, xmax, ymax], normalized 0-999 (0 = left/top "
+        "edge of the image, 999 = right/bottom edge), in the WHOLE image. "
+        "Bracket the cell tightly — just the cell, not the surrounding UI. "
+        "Since this is a single click (not a drag), use the SAME box for both "
+        "source and destination. "
+        "Do NOT reason step-by-step about coordinates and do NOT write a "
+        "long analysis. You MUST end your reply with exactly two "
+        "dictionaries (identical, one per line) followed by a description line, "
+        "in this exact format: "
+        '{"box_2d": [xmin, ymin, xmax, ymax], "label": "source"} '
+        '{"box_2d": [xmin, ymin, xmax, ymax], "label": "destination"} '
+        "move: <short description> "
+        "Example for 'Reveal cell col 3 row 5': "
+        '{"box_2d": [421, 607, 458, 661], "label": "source"} '
+        '{"box_2d": [421, 607, 458, 661], "label": "destination"} '
+        "move: reveal col 3 row 5 "
+        "If the cell cannot be located, output 'BOXES: NONE'."
+    )
+
+
 def build_user_prompt(move: str, game: str = "chess",
                       img_w: Optional[int] = None,
                       img_h: Optional[int] = None) -> str:
@@ -234,6 +266,15 @@ def build_user_prompt(move: str, game: str = "chess",
             f"destination is the empty square beyond the captured piece. "
             f"Report their bounding boxes (labels 'source' and 'destination') "
             f"and the from/to squares."
+        )
+    if "minesweeper" in g:
+        return (
+            f"The image shows a game of {game}.{size} "
+            f'The player wants to: "{move}". '
+            f"Locate the single cell on the grid that should be clicked. "
+            f"Report its bounding box (use the same box for both 'source' and "
+            f"'destination' since this is a single click) and a short "
+            f"description of the action."
         )
     return (
         f"The image shows a game of {game}.{size} "

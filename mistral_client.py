@@ -81,6 +81,29 @@ CHECKERS_PROMPT = (
     "Do NOT report pixel coordinates or bounding boxes."
 )
 
+MINESWEEPER_PROMPT = (
+    "This is a game of MINESWEEPER. "
+    "Think carefully about the position, then respond with EXACTLY ONE LINE "
+    "starting with 'MOVE: ' followed by the single best action. "
+    "No analysis in the output — just the MOVE: line. "
+    "Minesweeper rules: "
+    "The board is a grid of cells. Each cell either contains a mine or is safe. "
+    "Numbers on revealed cells show how many mines are in the 8 surrounding cells. "
+    "Use the numbers to deduce which hidden cells are safe and which contain mines. "
+    "LEFT-CLICK (reveal) a cell you are CERTAIN is safe (not a mine). "
+    "RIGHT-CLICK (flag) a cell you are CERTAIN is a mine. "
+    "Priority: 1) Flag cells that are definitely mines. "
+    "2) Reveal cells that are definitely safe. "
+    "3) If no certain move exists, reveal the cell with the lowest probability "
+    "of being a mine (prefer cells adjacent to the fewest unrevealed neighbors). "
+    "Cells are identified by column and row (1-based, left-to-right, top-to-bottom). "
+    "Examples: 'MOVE: Reveal cell col 3 row 5', 'MOVE: Flag cell col 7 row 2', "
+    "'MOVE: Reveal cell col 1 row 1'. "
+    "If the game is already won or lost, reply: 'MOVE: No moves available'. "
+    "Never suggest clicking a cell that might be a mine when a certain move exists. "
+    "Do NOT report pixel coordinates or bounding boxes."
+)
+
 def encode_image(image_path: str) -> tuple[str, str]:
     """Encode image to base64. Returns (base64, mime_type)."""
     with open(image_path, 'rb') as f:
@@ -241,6 +264,8 @@ def ask_best_move(
         text = CHESS_PROMPT
     elif game_hint and ("checkers" in game_hint.lower() or "draughts" in game_hint.lower()):
         text = CHECKERS_PROMPT
+    elif game_hint and "minesweeper" in game_hint.lower():
+        text = MINESWEEPER_PROMPT
     else:
         text = BASE_PROMPT
     text += ADVICE_SUFFIX
@@ -288,6 +313,7 @@ def default_prompts() -> list[dict]:
         {"title": "Klondike Solitaire (default)", "text": BASE_PROMPT},
         {"title": "Chess (default)", "text": CHESS_PROMPT},
         {"title": "Checkers (default)", "text": CHECKERS_PROMPT},
+        {"title": "Minesweeper (default)", "text": MINESWEEPER_PROMPT},
     ]
 
 

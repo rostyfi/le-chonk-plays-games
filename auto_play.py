@@ -147,7 +147,7 @@ def play_one_move(
         for line in det.raw.splitlines():
             print(f"        {line}")
 
-    # ── Step 3: Build drag action and execute ──
+    # ── Step 3: Build action and execute ──
     actions: list[Action] = []
     if det.source_point and det.dest_point:
         sx, sy = det.source_point
@@ -168,11 +168,20 @@ def play_one_move(
             sy += off_y
             dx += off_x
             dy += off_y
-        actions.append(Action(
-            type='drag', x1=sx, y1=sy, x2=dx, y2=dy,
-            raw=f"move_detector: {det.from_square} -> {det.to_square} "
-                f"({sx},{sy}) -> ({dx},{dy})",
-        ))
+        # For Minesweeper: single click (left=reveal, right=flag)
+        if game == "minesweeper":
+            is_flag = "flag" in move_text.lower()
+            actions.append(Action(
+                type='right_click' if is_flag else 'click',
+                x1=sx, y1=sy,
+                raw=f"move_detector: {det.description or move_text} ({sx},{sy})",
+            ))
+        else:
+            actions.append(Action(
+                type='drag', x1=sx, y1=sy, x2=dx, y2=dy,
+                raw=f"move_detector: {det.from_square} -> {det.to_square} "
+                    f"({sx},{sy}) -> ({dx},{dy})",
+            ))
 
     log: list[str] = []
     if actions:
