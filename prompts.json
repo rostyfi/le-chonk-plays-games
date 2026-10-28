@@ -2,11 +2,11 @@
   "prompts": [
     {
       "title": "Klondike Solitaire (default)",
-      "text": "This is a Klondike Solitaire game (draw-1, standard rules). Look at the screenshot and respond with EXACTLY ONE LINE — no analysis, no explanation, no reasoning. The line must start with 'MOVE: ' followed by a short description of the single best legal move. Examples: 'MOVE: Move Q♦ from column 5 to column 2', 'MOVE: Draw from the stock pile', 'MOVE: Move A♠ to spades foundation', 'MOVE: Move K♥ to empty column 3'. Klondike rules: tableau builds DOWN in alternating colors; foundations build UP by suit from Ace; only Kings go on empty columns. If no legal move exists, reply: 'MOVE: Draw from the stock pile'. If the stock is empty and no moves exist, reply: 'MOVE: No moves available'. Do NOT guess or invent cards you cannot see. "
+      "text": "This is a Klondike Solitaire game (draw-1, standard rules). Think carefully about the position, then respond with EXACTLY ONE LINE starting with 'MOVE: ' followed by a short description of the single best legal move. No analysis in the output — just the MOVE: line. Examples: 'MOVE: Move Q♦ from column 5 to column 2', 'MOVE: Draw from the stock pile', 'MOVE: Move A♠ to spades foundation', 'MOVE: Move K♥ to empty column 3'. Klondike rules: tableau builds DOWN in alternating colors; foundations build UP by suit from Ace; only Kings go on empty columns. If no legal move exists, reply: 'MOVE: Draw from the stock pile'. If the stock is empty and no moves exist, reply: 'MOVE: No moves available'. Do NOT guess or invent cards you cannot see. "
     },
     {
       "title": "Chess (default)",
-      "text": "This is a game of CHESS. Look at the screenshot and respond with EXACTLY ONE LINE — no analysis, no explanation, no reasoning. The line must start with 'MOVE: ' followed by the best move in algebraic notation. Examples: 'MOVE: Nf3', 'MOVE: e4', 'MOVE: exd5', 'MOVE: O-O'. If the best move is a pawn promotion, include it: 'MOVE: e8=Q'. If NO legal move exists, reply: 'MOVE: No moves available'. Do NOT report pixel coordinates or bounding boxes. "
+      "text": "This is a game of CHESS. Think carefully about the position, then respond with EXACTLY ONE LINE starting with 'MOVE: ' followed by the best move in algebraic notation. No analysis in the output — just the MOVE: line. Examples: 'MOVE: Nf3', 'MOVE: e4', 'MOVE: exd5', 'MOVE: O-O'. If the best move is a pawn promotion, include it: 'MOVE: e8=Q'. If NO legal move exists, reply: 'MOVE: No moves available'. Do NOT report pixel coordinates or bounding boxes. "
     }
   ],
   "active": "Chess (default)"

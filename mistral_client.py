@@ -21,9 +21,9 @@ PROMPTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts
 
 BASE_PROMPT = (
     "This is a Klondike Solitaire game (draw-1, standard rules). "
-    "Look at the screenshot and respond with EXACTLY ONE LINE — no analysis, "
-    "no explanation, no reasoning. The line must start with 'MOVE: ' followed "
-    "by a short description of the single best legal move. "
+    "Think carefully about the position, then respond with EXACTLY ONE LINE "
+    "starting with 'MOVE: ' followed by a short description of the single "
+    "best legal move. No analysis in the output — just the MOVE: line. "
     "Examples: 'MOVE: Move Q♦ from column 5 to column 2', "
     "'MOVE: Draw from the stock pile', "
     "'MOVE: Move A♠ to spades foundation', "
@@ -36,15 +36,15 @@ BASE_PROMPT = (
 )
 
 ADVICE_SUFFIX = (
-    "Respond with ONLY the MOVE: line — no other text, no analysis, "
-    "no explanation."
+    "Think step-by-step about the position, but your final output must be "
+    "ONLY the MOVE: line — no other text."
 )
 
 CHESS_PROMPT = (
     "This is a game of CHESS. "
-    "Look at the screenshot and respond with EXACTLY ONE LINE — no analysis, "
-    "no explanation, no reasoning. The line must start with 'MOVE: ' followed "
-    "by the best move in algebraic notation. "
+    "Think carefully about the position, then respond with EXACTLY ONE LINE "
+    "starting with 'MOVE: ' followed by the best move in algebraic notation. "
+    "No analysis in the output — just the MOVE: line. "
     "Examples: 'MOVE: Nf3', 'MOVE: e4', 'MOVE: exd5', 'MOVE: O-O'. "
     "If the best move is a pawn promotion, include it: 'MOVE: e8=Q'. "
     "If NO legal move exists, reply: 'MOVE: No moves available'. "
@@ -114,10 +114,10 @@ def _call_api(api_key: str, image_path: str, user_prompt: str, model: str) -> st
                  "image_url": {"url": f"data:{mime_type};base64,{image_b64}"}},
             ],
         }],
-        "max_tokens": 4096,
+        "max_tokens": 8192,
         "temperature": 0,
         "top_p": 1,
-        "reasoning_effort": "none",
+        "reasoning_effort": "high",
     }
 
     req = urllib.request.Request(
