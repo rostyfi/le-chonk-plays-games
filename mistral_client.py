@@ -32,7 +32,12 @@ BASE_PROMPT = (
     "'Draw from the stock pile.' Never suggest an illegal move. "
     "If the stock is empty and the waste cannot be recycled, say 'No moves available.' "
     "Do NOT guess or invent cards you cannot see. "
-    "Do NOT report pixel coordinates or bounding boxes — only describe the move."
+    "Do NOT report pixel coordinates or bounding boxes — only describe the move. "
+    "IMPORTANT: The VERY LAST line of your response MUST be a single line "
+    "starting with 'MOVE: ' followed by a short, actionable description of "
+    "the move, e.g. 'MOVE: Move Q♦ from column 5 to column 2' or "
+    "'MOVE: Draw from the stock pile' or 'MOVE: Move A♠ to spades foundation'. "
+    "Nothing may come after the MOVE: line."
 )
 
 ADVICE_SUFFIX = (
@@ -50,6 +55,9 @@ CHESS_PROMPT = (
     "If the best move is a pawn promotion, say which piece to promote to. "
     "Do NOT report pixel coordinates or bounding boxes — only the move in "
     "algebraic notation. "
+    "IMPORTANT: The VERY LAST line of your response MUST be a single line "
+    "starting with 'MOVE: ' followed by the move in algebraic notation, "
+    "e.g. 'MOVE: Nf3' or 'MOVE: e4'. Nothing may come after the MOVE: line."
 )
 
 def encode_image(image_path: str) -> tuple[str, str]:

@@ -305,35 +305,53 @@ def extract_move_text(response: str, game: str = "chess") -> str:
     """
     Extract the move to play from the AI's advice response.
 
-    The AI's contract says the LAST sentence states the best move.
-    This function takes the last non-empty line and extracts the move
-    notation from it.
+    For chess: extracts algebraic notation (e.g. "Nf3", "e4", "exd5", "O-O")
+    from the last sentence.
 
-    For chess: extracts algebraic notation (e.g. "Nf3", "e4", "exd5", "O-O").
-    For other games: returns the full last sentence (the move description).
+    For other games (solitaire, etc.): looks for a 'MOVE: <description>'
+    line first (the AI is instructed to end with this). Falls back to
+    the last non-empty line if no MOVE: line is found.
 
     Returns the extracted move string, or empty string if none found.
     """
     lines = [l.strip() for l in response.strip().splitlines() if l.strip()]
     if not lines:
         return ""
-    last = lines[-1]
 
     if game == "chess":
-        # Try to find a chess move pattern in the last sentence
+        # First: look for 'MOVE: <notation>' line (search from the end)
+        for line in reversed(lines):
+            m = re.match(r'^MOVE\s*:\s*(.+)', line, re.IGNORECASE)
+            if m:
+                desc = m.group(1).strip()
+                # Extract the chess move from the description
+                cm = _CHESS_MOVE_RE.search(desc)
+                if cm:
+                    return cm.group(1)
+                if _CHESS_MOVE_RE.fullmatch(desc):
+                    return desc
+        # Fallback: extract from the last sentence
+        last = lines[-1]
         m = _CHESS_MOVE_RE.search(last)
         if m:
             return m.group(1)
-        # Fallback: if the last line looks like a bare move, use it
         if _CHESS_MOVE_RE.fullmatch(last):
             return last
-        # Last resort: search the whole response for a move pattern
         m = _CHESS_MOVE_RE.search(response)
         if m:
             return m.group(1)
-        return last  # return the sentence as-is; move_detector can try
+        return last
 
-    return last
+    # Non-chess: look for 'MOVE: <description>' line (search from the end)
+    for line in reversed(lines):
+        m = re.match(r'^MOVE\s*:\s*(.+)', line, re.IGNORECASE)
+        if m:
+            desc = m.group(1).strip()
+            if desc:
+                return desc
+
+    # Fallback: return the last non-empty line
+    return lines[-1]
 
 
 def parse_actions(response: str) -> list[Action]:
