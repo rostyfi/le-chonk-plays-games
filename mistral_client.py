@@ -11,6 +11,9 @@ import sys
 import urllib.request
 import urllib.error
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from move_parser import extract_move_text
+
 MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
 MODEL = "mistral-large-4"
 
@@ -65,7 +68,7 @@ CHESS_PROMPT = (
     "If NO legal move exists, say 'No moves available.' "
     "If the best move is a pawn promotion, say which piece to promote to. "
     "Do NOT report pixel coordinates or bounding boxes — only the move in "
-    "algebraic notation."
+    "algebraic notation. "
 )
 
 def encode_image(image_path: str) -> tuple[str, str]:
@@ -179,15 +182,47 @@ def ask_best_move(
     Anti-hallucination prompt: model must only use visible cards.
 
     prompt: custom base prompt text (e.g. from the app's prompt library).
-        If None, the built-in BASE_PROMPT is used.
+        If None, a game-appropriate default is chosen: CHESS_PROMPT when
+        game_hint indicates chess, otherwise BASE_PROMPT (Solitaire).
+    game_hint: used to select the default prompt when prompt is None.
     """
-    text = prompt if prompt is not None else BASE_PROMPT
+    if prompt is not None:
+        text = prompt
+    elif game_hint and "chess" in game_hint.lower():
+        text = CHESS_PROMPT
+    else:
+        text = BASE_PROMPT
     text += ADVICE_SUFFIX
     if history:
         text = "Previous moves:\n" + "\n".join(f"  {h}" for h in history) + "\n\n" + text
 
     print(f"Trying {MODEL}...", file=sys.stderr)
     return _call_api(api_key, image_path, text, MODEL)
+
+
+def ask_best_move_parsed(
+    api_key: str,
+    image_path: str,
+    game: str = "chess",
+    game_hint: str = None,
+    history: list[str] = None,
+    prompt: str = None,
+) -> tuple[str, str]:
+    """
+    Ask Mistral for the best move and extract the move text from the response.
+
+    Combines ask_best_move() with move_parser.extract_move_text() so callers
+    get both the raw AI response and the parsed move (e.g. "Nf3") in one call.
+
+    Returns (raw_response, move_text). move_text is empty string if no move
+    could be extracted.
+    """
+    response = ask_best_move(
+        api_key, image_path,
+        game_hint=game_hint or game, history=history, prompt=prompt,
+    )
+    move_text = extract_move_text(response, game=game)
+    return response, move_text
 
 
 # ── Prompt library (prompts.json) ──────────────────────────────────

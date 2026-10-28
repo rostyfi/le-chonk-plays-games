@@ -6,8 +6,8 @@
     },
     {
       "title": "Chess (default)",
-      "text": "This is a game of CHESS. First, describe the board exactly as you see it: an 8x8 grid of squares. For every occupied square, give its coordinate (file a-h, rank 1-8) and the piece on it (white or black King, Queen, Rook, Bishop, Knight, or Pawn). State which side is to move (White or Black). Do NOT guess or invent pieces you cannot see. If you are unsure about a square, say so. Then, based ONLY on the visible board, what is the single best legal move? Chess rules: standard piece movement; never suggest an illegal move; consider checks, captures, threats, and king safety. State the move using algebraic notation (e.g. 'Nf3', 'exd5', 'O-O'). If NO legal move exists, say 'No moves available.' If the best move is a pawn promotion, say which piece to promote to. Do NOT report pixel coordinates or bounding boxes — only the move in algebraic notation."
+      "text": "This is a game of CHESS. First, describe the board exactly as you see it: an 8x8 grid of squares. For every occupied square, give its coordinate (file a-h, rank 1-8) and the piece on it (white or black King, Queen, Rook, Bishop, Knight, or Pawn). State which side is to move (White or Black). Do NOT guess or invent pieces you cannot see. If you are unsure about a square, say so. Then, based ONLY on the visible board, what is the single best legal move? Chess rules: standard piece movement; never suggest an illegal move; consider checks, captures, threats, and king safety. State the move using algebraic notation (e.g. 'Nf3', 'exd5', 'O-O'). If NO legal move exists, say 'No moves available.' If the best move is a pawn promotion, say which piece to promote to. Do NOT report pixel coordinates or bounding boxes — only the move in algebraic notation. "
     }
   ],
-  "active": "Klondike Solitaire (default)"
+  "active": "Chess (default)"
 }

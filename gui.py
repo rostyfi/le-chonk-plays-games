@@ -26,9 +26,9 @@ from gi.repository import Gtk, Gdk, GdkPixbuf, GLib, Gio
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from screenshot import X11WindowCapture
-from mistral_client import ask_best_move, ensure_prompts_file, save_prompts
+from mistral_client import ask_best_move_parsed, ensure_prompts_file, save_prompts
 from move_parser import (Action, execute_actions, offset_actions,
-                        extract_move_text, extract_boxes, drag_to_clicks)
+                        extract_boxes, drag_to_clicks)
 from move_detector import detect_move
 from overlay import draw_move_overlay, move_changed_board
 from input_controller import X11Input
@@ -489,15 +489,14 @@ class AdvisorWindow(Gtk.ApplicationWindow):
             # 2. Show screenshot preview
             GLib.idle_add(self._show_screenshot, tmp_path)
 
-            # 3. Step 1 — Call Mistral API for the best move (text only)
-            advice = ask_best_move(
+            # 3. Step 1 — Ask Mistral for the best move + extract move text
+            advice, move_text = ask_best_move_parsed(
                 self.api_key, tmp_path,
-                game_hint="chess",
+                game="chess",
                 prompt=prompt_text,
             )
 
-            # 4. Extract the move and detect pixel coordinates
-            move_text = extract_move_text(advice, game="chess")
+            # 4. Detect pixel coordinates for the move
             GLib.idle_add(
                 self.status_label.set_label,
                 f"Move: {move_text!r} — detecting on board...",

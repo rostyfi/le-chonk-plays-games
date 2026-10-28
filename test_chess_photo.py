@@ -19,9 +19,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from PIL import Image
 
-from move_parser import Action, extract_move_text
+from move_parser import Action
 from move_detector import detect_move
-from mistral_client import CHESS_PROMPT, ask_best_move
+from mistral_client import CHESS_PROMPT, ask_best_move_parsed
 from overlay import MOVE_COLOR, draw_move_overlay
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -42,13 +42,12 @@ print(f'Photo: {PHOTO}')
 
 # Step 1: ask for the best move (text only)
 print('Step 1: Asking Mistral for the best move...')
-response = ask_best_move(api_key, PHOTO, prompt=CHESS_PROMPT)
+response, move_text = ask_best_move_parsed(api_key, PHOTO, game='chess', prompt=CHESS_PROMPT)
 print('--- raw API response ---')
 print(response)
 print('--- end of raw response ---')
 print()
 
-move_text = extract_move_text(response, game='chess')
 print(f'Extracted move: {move_text!r}')
 assert move_text, 'no move extracted from the response'
 

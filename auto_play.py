@@ -26,8 +26,8 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from screenshot import take_screenshot, take_window_screenshot, X11WindowCapture
-from mistral_client import ask_best_move
-from move_parser import Action, execute_actions, extract_move_text
+from mistral_client import ask_best_move_parsed
+from move_parser import Action, execute_actions
 from move_detector import detect_move
 from input_controller import X11Input
 
@@ -97,14 +97,14 @@ def play_one_move(
     if verbose:
         print(f"      Saved: {image_path}")
 
-    # ── Step 1: Ask the AI for the best move (text only, no coordinates) ──
+    # ── Step 1: Ask the AI for the best move + extract move text ──
     if verbose:
         history_note = f" ({len(history)} previous moves)" if history else ""
         mode_note = " [DRY RUN]" if dry_run else ""
         print(f"[2/4] Asking Mistral for the best move{mode_note}{history_note}...")
-    response = ask_best_move(
+    response, move_text = ask_best_move_parsed(
         api_key, image_path,
-        game_hint=game_hint, history=history,
+        game=game, game_hint=game_hint, history=history,
     )
 
     if verbose:
@@ -112,10 +112,6 @@ def play_one_move(
     print(response)
     if verbose:
         print(f"{'='*60}\n")
-
-    # Extract the move from the response (last sentence)
-    move_text = extract_move_text(response, game=game)
-    if verbose:
         print(f"[3/4] Extracted move: {move_text!r}")
     if not move_text:
         if verbose:
