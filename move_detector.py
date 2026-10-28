@@ -85,7 +85,18 @@ def build_system_prompt(game: str = "chess") -> str:
     task, a response format with a concrete example, free generation) but is
     deliberately forceful: the model must END with the two standardized
     dictionaries and must not ramble about coordinate math.
+
+    Game-specific: chess asks for algebraic squares + legality; solitaire
+    asks for card/pile descriptions in natural language.
     """
+    if "solitaire" in game.lower() or "klondike" in game.lower():
+        return _build_solitaire_system_prompt(game)
+    return _build_chess_system_prompt(game)
+
+
+def _build_chess_system_prompt(game: str) -> str:
+    """Chess system prompt: locate source/destination squares, report
+    bounding boxes + algebraic from/to squares."""
     return (
         "You are an object-detection vision model for a board-game-playing "
         f"agent. The game is {game}. "
@@ -124,12 +135,57 @@ def build_system_prompt(game: str = "chess") -> str:
     )
 
 
+def _build_solitaire_system_prompt(game: str) -> str:
+    """Solitaire system prompt: locate source card and destination pile,
+    report bounding boxes + natural-language description."""
+    return (
+        "You are an object-detection vision model for a card-game-playing "
+        f"agent. The game is {game} (Klondike Solitaire). "
+        "Objective: given a screenshot and a move described in natural "
+        "language (e.g. 'Move the 7 of diamonds from tableau column 3 "
+        "to tableau column 5', 'Draw from the stock pile', 'Move the "
+        "King of spades to an empty column'), locate the two objects "
+        "involved in that move — the SOURCE (the card or pile being "
+        "interacted with) and the DESTINATION (where it goes). "
+        "Task — box_2d only: report the bounding box of each object as 4 "
+        "coordinates [xmin, ymin, xmax, ymax], normalized 0-999 (0 = left/top "
+        "edge of the image, 999 = right/bottom edge), in the WHOLE image. "
+        "Bracket each object tightly: the 'source' box brackets the card "
+        "being moved (or the stock pile if drawing); the 'destination' box "
+        "brackets the destination pile's top card (or the empty column "
+        "placeholder). "
+        "Do NOT reason step-by-step about coordinates and do NOT write a "
+        "long analysis. You MUST end your reply with exactly two "
+        "dictionaries (one per line) followed by a description line, in "
+        "this exact format: "
+        '{"box_2d": [xmin, ymin, xmax, ymax], "label": "source"} '
+        '{"box_2d": [xmin, ymin, xmax, ymax], "label": "destination"} '
+        "move: <short description> "
+        "Example for 'Move the 7♦ from column 3 to column 5': "
+        '{"box_2d": [421, 607, 458, 661], "label": "source"} '
+        '{"box_2d": [621, 496, 658, 550], "label": "destination"} '
+        "move: 7♦ column 3 -> column 5 "
+        "If the move is a single click (e.g. 'Draw from the stock pile'), "
+        "use the same box for both source and destination (the stock pile). "
+        "If the move cannot be located on the board, output 'BOXES: NONE'."
+    )
+
+
 def build_user_prompt(move: str, game: str = "chess",
                       img_w: Optional[int] = None,
                       img_h: Optional[int] = None) -> str:
     """User prompt: the specific move to detect on the attached screenshot."""
     size = (f" The screenshot is {img_w}x{img_h} pixels."
             if img_w and img_h else "")
+    if "solitaire" in game.lower() or "klondike" in game.lower():
+        return (
+            f"The image shows a game of {game}.{size} "
+            f'The player wants to play: "{move}". '
+            f"Detect the source object (the card or pile being moved from) "
+            f"and the destination object (where it goes). Report their "
+            f"bounding boxes (labels 'source' and 'destination') and a "
+            f"short description of the move."
+        )
     return (
         f"The image shows a game of {game}.{size} "
         f'The player wants to play the move "{move}". Detect the source '
@@ -148,8 +204,8 @@ class DetectedMove:
     """A detected game move resolved into a from/to pair."""
     move: str                       # the input move text, e.g. "e4"
     game: str                       # e.g. "chess"
-    from_square: Optional[str]      # algebraic source, e.g. "e2"
-    to_square: Optional[str]        # algebraic destination, e.g. "e4"
+    from_square: Optional[str]      # algebraic source, e.g. "e2" (chess only)
+    to_square: Optional[str]        # algebraic destination, e.g. "e4" (chess only)
     source_box: Optional[tuple]     # normalized (xmin, ymin, xmax, ymax) 0-999
     dest_box: Optional[tuple]       # normalized (xmin, ymin, xmax, ymax) 0-999
     source_point: Optional[tuple]   # pixel (x, y) center of the source box
@@ -157,13 +213,19 @@ class DetectedMove:
     image_size: Optional[tuple]     # (width, height) of the image in pixels
     raw: str                        # raw model reply
     overlay_path: Optional[str] = None  # annotated picture, if one was drawn
+    description: Optional[str] = None   # natural-language move desc (non-chess)
 
     @property
     def from_to(self) -> tuple:
         return (self.from_square, self.to_square)
 
     def describe(self) -> str:
-        ft = f"{self.from_square} -> {self.to_square}" if self.from_square else "?"
+        if self.from_square:
+            ft = f"{self.from_square} -> {self.to_square}"
+        elif self.description:
+            ft = self.description
+        else:
+            ft = "?"
         sp = f"{self.source_point}" if self.source_point else "?"
         dp = f"{self.dest_point}" if self.dest_point else "?"
         s = f"move {self.move!r}: {ft} | source px {sp} | dest px {dp}"
@@ -368,6 +430,19 @@ def extract_squares(text_content: str) -> Optional[tuple[str, str]]:
     return None
 
 
+def extract_description(text_content: str) -> Optional[str]:
+    """Extract the move description line (non-chess games).
+
+    Looks for 'move: <description>' lines. Returns None if not found.
+    """
+    m = re.search(r'\bmove\s*:\s*(.+)', text_content, re.IGNORECASE)
+    if m:
+        desc = m.group(1).strip()
+        if desc and desc.upper() != 'NONE':
+            return desc
+    return None
+
+
 def _box_center_px(box: tuple, w: int, h: int) -> tuple[int, int]:
     """Convert a normalized (0-999) box to its pixel center (x, y)."""
     x1, y1, x2, y2 = (max(0.0, min(999.0, float(v))) for v in box)
@@ -378,7 +453,9 @@ def parse_detection(raw: str, move: str, game: str,
                     img_w: Optional[int], img_h: Optional[int]) -> DetectedMove:
     """Parse a model reply into a DetectedMove."""
     boxes = extract_boxes(raw)
-    squares = extract_squares(raw)
+    is_chess = game == "chess"
+    squares = extract_squares(raw) if is_chess else None
+    description = None if is_chess else extract_description(raw)
     source_box = boxes['source'] if boxes else None
     dest_box = boxes['dest'] if boxes else None
     source_point = dest_point = None
@@ -397,6 +474,7 @@ def parse_detection(raw: str, move: str, game: str,
         dest_point=dest_point,
         image_size=(img_w, img_h) if img_w and img_h else None,
         raw=raw,
+        description=description,
     )
 
 
@@ -456,7 +534,7 @@ def draw_detected_move(image_path: str, det: DetectedMove,
         draw.ellipse([sx - r, sy - r, sx + r, sy + r], fill=MOVE_COLOR)
         draw.ellipse([dx - r, dy - r, dx + r, dy + r], fill=MOVE_COLOR)
 
-    # labels: from/to squares above the boxes, move summary at top-left
+    # labels: from/to squares (chess) or description (other games)
     if det.source_box and det.from_square:
         bx1, by1, _, _ = _box_to_px(det.source_box, w, h)
         draw.text((bx1, max(0, by1 - 14)), f"from {det.from_square}",
@@ -469,6 +547,10 @@ def draw_detected_move(image_path: str, det: DetectedMove,
         draw.text((8, 8),
                   f"{det.game}: {det.move}  {det.from_square} -> "
                   f"{det.to_square}", fill=(255, 255, 255))
+    elif det.description:
+        draw.text((8, 8),
+                  f"{det.game}: {det.move}  ({det.description})",
+                  fill=(255, 255, 255))
 
     img.save(out_path)
     return out_path
