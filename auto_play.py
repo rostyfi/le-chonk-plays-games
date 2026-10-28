@@ -26,9 +26,9 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from screenshot import take_screenshot, take_window_screenshot, X11WindowCapture
-from mistral_client import ask_best_move_parsed
+from mistral_client import ask_best_move_parsed, image_size
 from move_parser import Action, execute_actions
-from move_detector import detect_move
+from move_detector import detect_move, build_system_prompt, build_user_prompt
 from input_controller import X11Input
 
 
@@ -128,9 +128,22 @@ def play_one_move(
     # ── Step 2: Send the move to move_detector for pixel coordinates ──
     if verbose:
         print(f"[3/4] Detecting move '{move_text}' on the board...")
+        iw, ih = image_size(image_path)
+        print(f"      move_detector request:")
+        print(f"        image: {image_path} ({iw}x{ih})")
+        print(f"        move: {move_text!r}  game: {game}")
+        print(f"        system prompt ({len(build_system_prompt(game))} chars):")
+        for line in build_system_prompt(game).splitlines():
+            print(f"          {line}")
+        print(f"        user prompt:")
+        for line in build_user_prompt(move_text, game, iw, ih).splitlines():
+            print(f"          {line}")
     det = detect_move(api_key, image_path, move_text, game=game)
     if verbose:
         print(f"      {det.describe()}")
+        print(f"      raw response:")
+        for line in det.raw.splitlines():
+            print(f"        {line}")
 
     # ── Step 3: Build drag action and execute ──
     actions: list[Action] = []

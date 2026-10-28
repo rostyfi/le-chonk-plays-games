@@ -29,7 +29,7 @@ from screenshot import X11WindowCapture
 from mistral_client import ask_best_move_parsed, ensure_prompts_file, save_prompts
 from move_parser import (Action, execute_actions, offset_actions,
                         extract_boxes, drag_to_clicks)
-from move_detector import detect_move
+from move_detector import detect_move, build_system_prompt, build_user_prompt
 from overlay import draw_move_overlay, move_changed_board
 from input_controller import X11Input
 
@@ -504,9 +504,26 @@ class AdvisorWindow(Gtk.ApplicationWindow):
 
             actions: list[Action] = []
             detection = None
+            detector_debug = ""
             if move_text and mode in ("dry_run", "execute"):
                 det = detect_move(self.api_key, tmp_path, move_text, game="chess")
                 detection = det.describe()
+
+                # Build a debug view of what was sent to move_detector
+                from mistral_client import image_size as _img_size
+                iw, ih = _img_size(tmp_path)
+                sys_prompt = build_system_prompt("chess")
+                user_prompt = build_user_prompt(move_text, "chess", iw, ih)
+                detector_debug = (
+                    f"── move_detector request ──\n"
+                    f"image: {tmp_path} ({iw}x{ih})\n"
+                    f"move: {move_text!r}  game: chess\n"
+                    f"\n── system prompt ──\n{sys_prompt}\n"
+                    f"\n── user prompt ──\n{user_prompt}\n"
+                    f"\n── raw response ──\n{det.raw}\n"
+                    f"\n── parsed ──\n{det.describe()}\n"
+                )
+
                 if det.source_point and det.dest_point:
                     sx, sy = det.source_point
                     dy_px, dx_px = det.dest_point
@@ -570,7 +587,7 @@ class AdvisorWindow(Gtk.ApplicationWindow):
                 )
 
             # 6. Update UI with advice
-            GLib.idle_add(self._show_advice, advice, tmp_path, screen_actions, exec_log, mode)
+            GLib.idle_add(self._show_advice, advice, tmp_path, screen_actions, exec_log, mode, detector_debug)
 
         except Exception as e:
             GLib.idle_add(self._show_error, str(e))
@@ -692,9 +709,12 @@ class AdvisorWindow(Gtk.ApplicationWindow):
         self.history_list.prepend(row)
 
     def _show_advice(self, advice: str, image_path: str, actions=None,
-                     exec_log=None, mode: str = "advise"):
+                     exec_log=None, mode: str = "advise",
+                     detector_debug: str = ""):
         """Display advice text (plus planned actions / execution log) and history."""
         text = advice
+        if detector_debug:
+            text += "\n\n" + detector_debug
         if actions:
             text += "\n\n── Planned actions ──\n" + "\n".join(
                 a.describe() for a in actions
