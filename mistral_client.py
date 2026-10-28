@@ -114,7 +114,7 @@ def _call_api(api_key: str, image_path: str, user_prompt: str, model: str) -> st
                  "image_url": {"url": f"data:{mime_type};base64,{image_b64}"}},
             ],
         }],
-        "max_tokens": 8192,
+        "max_tokens": 32768,
         "temperature": 0,
         "top_p": 1,
         "reasoning_effort": "high",
@@ -151,8 +151,32 @@ def _call_api(api_key: str, image_path: str, user_prompt: str, model: str) -> st
         raise RuntimeError(f"No choices: {json.dumps(result)[:500]}")
 
     text = _extract_text(choices[0]['message'])
+    finish = choices[0].get('finish_reason', '?')
     if not text.strip():
-        raise RuntimeError(f"Empty response (finish_reason={choices[0].get('finish_reason', '?')})")
+        if finish == 'length':
+            # Model used all tokens on reasoning — retry without reasoning
+            print("  [retry] Empty response (length) — retrying without reasoning...", file=sys.stderr)
+            payload['reasoning_effort'] = 'none'
+            payload['max_tokens'] = 4096
+            req = urllib.request.Request(
+                MISTRAL_API_URL,
+                data=json.dumps(payload).encode('utf-8'),
+                headers={
+                    'Content-Type': 'application/json',
+                    'Authorization': f'Bearer {api_key}',
+                },
+                method='POST',
+            )
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                result = json.loads(resp.read().decode('utf-8'))
+            choices = result.get('choices', [])
+            if not choices:
+                raise RuntimeError(f"No choices on retry: {json.dumps(result)[:500]}")
+            text = _extract_text(choices[0]['message'])
+            if not text.strip():
+                raise RuntimeError(f"Empty response on retry (finish_reason={choices[0].get('finish_reason', '?')})")
+        else:
+            raise RuntimeError(f"Empty response (finish_reason={finish})")
 
     return text
 
