@@ -21,31 +21,18 @@ PROMPTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts
 
 BASE_PROMPT = (
     "This is a Klondike Solitaire game (draw-1, standard rules). "
-    "The image may contain interface around the playing table (window title "
-    "bar, buttons, panels, desktop background) — IGNORE everything outside "
-    "the playing table; only the cards and piles matter. "
-    "First, locate the playing table in the image, then describe it: "
-    "(1) For each of the 7 tableau columns (left to right), list every card "
-    "top-to-bottom: rank, suit, face-up or face-down. "
-    "EXPLICITLY state which columns are COMPLETELY EMPTY — an empty column "
-    "is shown as a LIGHT GREEN RECTANGLE (a pale green placeholder box, "
-    "lighter than the dark green felt background) with NO cards on it. "
-    "Count these carefully — there may be zero, one, or several. "
-    "(2) List the stock pile, waste pile, and 4 foundation piles "
-    "(which suits are started, top card of each). "
-    "(3) Note any visible score, move count, or timer. "
-    "Do NOT guess or invent cards you cannot see. "
-    "If you are unsure about a card, say so. "
-    "Then, based ONLY on the visible cards, what is the single best legal move? "
+    "The image may contain interface around the playing table — IGNORE "
+    "everything outside the playing table; only the cards and piles matter. "
+    "Based ONLY on the visible cards, what is the single best legal move? "
     "Klondike rules: cards on the tableau build DOWN in alternating colors "
     "(e.g. 9♥ on 10♠). Foundations build UP by suit from Ace. "
     "ONLY a King (or a sequence starting with a King) can be placed "
     "on an EMPTY tableau column. "
-    "Moving a King to an empty column is often the best move because "
-    "it frees up the column it came from and opens new possibilities. "
     "If NO legal tableau or foundation move exists, the only correct answer is: "
     "'Draw from the stock pile.' Never suggest an illegal move. "
     "If the stock is empty and the waste cannot be recycled, say 'No moves available.' "
+    "Do NOT guess or invent cards you cannot see. "
+    "Do NOT report pixel coordinates or bounding boxes — only describe the move."
 )
 
 ADVICE_SUFFIX = (
@@ -55,13 +42,7 @@ ADVICE_SUFFIX = (
 
 CHESS_PROMPT = (
     "This is a game of CHESS. "
-    "First, describe the board exactly as you see it: an 8x8 grid of squares. "
-    "For every occupied square, give its coordinate (file a-h, rank 1-8) "
-    "and the piece on it (white or black King, Queen, Rook, Bishop, Knight, "
-    "or Pawn). State which side is to move (White or Black). "
-    "Do NOT guess or invent pieces you cannot see. "
-    "If you are unsure about a square, say so. "
-    "Then, based ONLY on the visible board, what is the single best legal move? "
+    "Based ONLY on the visible board, what is the single best legal move? "
     "Chess rules: standard piece movement; never suggest an illegal move; "
     "consider checks, captures, threats, and king safety. "
     "State the move using algebraic notation (e.g. 'Nf3', 'exd5', 'O-O'). "
@@ -134,7 +115,7 @@ def _call_api(api_key: str, image_path: str, user_prompt: str, model: str) -> st
                  "image_url": {"url": f"data:{mime_type};base64,{image_b64}"}},
             ],
         }],
-        "max_tokens": 128000,
+        "max_tokens": 4096,
         "temperature": 0,
         "top_p": 1,
         "reasoning_effort": "none",
@@ -150,14 +131,21 @@ def _call_api(api_key: str, image_path: str, user_prompt: str, model: str) -> st
         method='POST',
     )
 
+    import time as _time
+    t0 = _time.monotonic()
     try:
-        with urllib.request.urlopen(req, timeout=600) as resp:
+        with urllib.request.urlopen(req, timeout=120) as resp:
             result = json.loads(resp.read().decode('utf-8'))
     except urllib.error.HTTPError as e:
         raise RuntimeError(f"API error ({e.code}): {e.read().decode('utf-8')[:500]}")
+    elapsed = _time.monotonic() - t0
 
     actual = result.get('model', '?')
-    print(f"  Served by: {actual}", file=sys.stderr)
+    usage = result.get('usage', {})
+    prompt_tok = usage.get('prompt_tokens', '?')
+    compl_tok = usage.get('completion_tokens', '?')
+    print(f"  Served by: {actual} | {elapsed:.1f}s | "
+          f"prompt={prompt_tok} completion={compl_tok} tokens", file=sys.stderr)
 
     choices = result.get('choices', [])
     if not choices:
