@@ -207,15 +207,20 @@ class X11Input:
             self._flush()
 
     def drag(self, start_x: int, start_y: int, end_x: int, end_y: int,
-             button: int = Button1, duration: float = 0.5, steps: int = 20):
-        """Drag from (start_x, start_y) to (end_x, end_y)."""
-        self.move(start_x, start_y)
-        time.sleep(0.1)
+             button: int = Button1, duration: float = 0.8, steps: int = 30):
+        """Drag from (start_x, start_y) to (end_x, end_y).
+
+        Uses smooth movement to the start position and deliberate timing
+        (longer pauses) so card games register the grab, drag, and drop.
+        """
+        # Smooth move to start so the game registers the hover
+        self.move(start_x, start_y, smooth=True, steps=10)
+        time.sleep(0.3)  # let the game show hover highlight
         # Press button
         self._fake_button(button, True)
         self._flush()
-        time.sleep(0.05)
-        # Move in steps
+        time.sleep(0.15)  # let the game register the grab
+        # Move in steps with ease-in-out
         for i in range(1, steps + 1):
             t = i / steps
             t = t * t * (3 - 2 * t)  # ease-in-out
@@ -224,10 +229,11 @@ class X11Input:
             self._fake_motion(cx, cy)
             self._flush()
             time.sleep(duration / steps)
-        # Release button
-        time.sleep(0.05)
+        # Release button — pause so the game registers the drop
+        time.sleep(0.15)
         self._fake_button(button, False)
         self._flush()
+        time.sleep(0.1)
         # Verify the pointer actually moved — catches silent XTest failure
         px, py = self.get_pointer_position()
         if abs(px - end_x) > 5 or abs(py - end_y) > 5:

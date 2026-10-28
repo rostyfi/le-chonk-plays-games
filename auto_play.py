@@ -152,6 +152,14 @@ def play_one_move(
     if det.source_point and det.dest_point:
         sx, sy = det.source_point
         dx, dy = det.dest_point
+        # For Solitaire: offset source downward — the top of the card may
+        # be covered by face-down cards. Grab from the visible portion.
+        if game == "solitaire" and det.source_box:
+            from mistral_client import image_size as _img_size
+            _iw, _ih = _img_size(image_path)
+            if _ih:
+                box_h = (det.source_box[3] - det.source_box[1]) / 1000 * _ih
+                sy += int(box_h * 0.3)
         # Window captures are window-relative — translate to screen coordinates
         if window_title:
             off_x, off_y = _window_offset(window_title)

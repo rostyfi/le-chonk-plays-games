@@ -658,9 +658,15 @@ class AdvisorWindow(Gtk.ApplicationWindow):
                 if det.source_point and det.dest_point:
                     sx, sy = det.source_point
                     dx, dy = det.dest_point
+                    # For Solitaire: offset source downward — the top of the
+                    # card may be covered by face-down cards in the column.
+                    # Grab from the lower (visible) portion of the card.
+                    if game == "solitaire" and det.source_box:
+                        box_h = (det.source_box[3] - det.source_box[1]) / 1000 * ih
+                        sy += int(box_h * 0.3)  # shift down by 30% of card height
                     actions.append(Action(
                         type='drag', x1=sx, y1=sy, x2=dx, y2=dy,
-                        raw=f"move_detector: {det.from_square} -> {det.to_square}",
+                        raw=f"move_detector: {det.description or det.from_square}",
                     ))
 
             if actions:
