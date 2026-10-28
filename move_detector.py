@@ -45,6 +45,7 @@ Run as a script (detects the move and writes an annotated picture):
 from __future__ import annotations
 
 import base64
+import bisect
 import json
 import math
 import os
@@ -573,6 +574,127 @@ def _chess_corrective_prompt(move: str, det: DetectedMove) -> Optional[str]:
     return None
 
 
+# ── Board detection (deterministic square pixel boxes for chess) ────────────
+#
+# The model reliably resolves the from/to SQUARES (with the legality retry),
+# but it often mis-localizes a square's pixel box (e.g. it placed the Nc3
+# destination box on c2 instead of c3). So for chess we detect the 8x8 board
+# grid straight from the image (its regular alternating-square edges) and
+# compute the square pixel boxes ourselves, overriding the model's boxes.
+
+_BOARD_CACHE: dict = {}
+
+
+def _find_grid_lines(strength: list) -> Optional[list]:
+    """Find 9 evenly-spaced strong peaks (the boundaries of 8 squares).
+
+    RANSAC-style: search for the spacing/offset whose 9 expected positions
+    (start + k*spacing, k=0..8) match the most peaks (>=7). Returns the 9
+    boundary positions, or None.
+    """
+    maxs = max(strength) if strength else 0.0
+    if maxs <= 0:
+        return None
+    thr = maxs * 0.15
+    peaks = [i for i in range(1, len(strength) - 1)
+             if strength[i] >= thr and strength[i] >= strength[i - 1]
+             and strength[i] > strength[i + 1]]
+    if len(peaks) < 7:
+        return None
+    peaks.sort()
+    best = None  # ((matches, strength_sum), spacing, matched_positions)
+    for s in range(15, 260):
+        tol = max(3, int(s * 0.12))
+        for p0 in peaks:
+            matched = []
+            for k in range(9):
+                target = p0 + k * s
+                idx = bisect.bisect_left(peaks, target)
+                cand = None
+                for ii in (idx - 1, idx):
+                    if 0 <= ii < len(peaks) and abs(peaks[ii] - target) <= tol:
+                        cand = peaks[ii]
+                        break
+                if cand is not None:
+                    matched.append(cand)
+            if len(matched) >= 7:
+                key = (len(matched), sum(strength[p] for p in matched))
+                if best is None or key > best[0]:
+                    best = (key, s, matched)
+    if best is None:
+        return None
+    _, s, matched = best
+    bounds = sorted(matched)
+    while len(bounds) < 9:
+        bounds = [bounds[0] - s] + bounds + [bounds[-1] + s]
+    return bounds[:9]
+
+
+def _detect_chess_board(image_path: str) -> Optional[tuple]:
+    """Detect the 8x8 chess board grid. Returns (left, top, sq_w, sq_h) in
+    pixels, or None if no regular grid is found. Cached per image path."""
+    key = os.path.abspath(image_path)
+    if key in _BOARD_CACHE:
+        return _BOARD_CACHE[key]
+    result = None
+    try:
+        from PIL import Image
+        img = Image.open(image_path).convert('L')
+        W, H = img.size
+        gray = list(img.getdata())  # ints 0-255, length W*H
+
+        gx = [0.0] * (W - 1)  # vertical-edge strength per column (file lines)
+        for y in range(H):
+            base = y * W
+            row = gray[base:base + W]
+            for x in range(W - 1):
+                gx[x] += abs(row[x + 1] - row[x])
+        gy = [0.0] * (H - 1)  # horizontal-edge strength per row (rank lines)
+        for y in range(H - 1):
+            base = y * W
+            nxt = base + W
+            for x in range(W):
+                gy[y] += abs(gray[nxt + x] - gray[base + x])
+
+        bx = _find_grid_lines(gx)
+        by = _find_grid_lines(gy)
+        if bx and by:
+            left, right = bx[0], bx[-1]
+            top, bottom = by[0], by[-1]
+            sq_w = (right - left) / 8.0
+            sq_h = (bottom - top) / 8.0
+            # sanity: a board is large and roughly square
+            if 20 <= sq_w <= 400 and 20 <= sq_h <= 400 and \
+                    abs(sq_w - sq_h) <= 0.25 * max(sq_w, sq_h):
+                result = (left, top, sq_w, sq_h)
+    except Exception:
+        result = None
+    _BOARD_CACHE[key] = result
+    return result
+
+
+def _square_px_box(board: tuple, sq: str) -> tuple:
+    """Pixel rectangle (x1, y1, x2, y2) of a square from the board grid."""
+    left, top, sw, sh = board
+    f = ord(sq[0].lower()) - ord('a')
+    r = int(sq[1]) - 1
+    x = left + f * sw
+    y = top + (7 - r) * sh
+    return (x, y, x + sw, y + sh)
+
+
+def _px_to_norm_box(box_px: tuple, w: int, h: int) -> tuple:
+    """Convert a pixel rectangle to a normalized (0-999) box."""
+    x1, y1, x2, y2 = box_px
+    return (round(x1 / w * 1000), round(y1 / h * 1000),
+            round(x2 / w * 1000), round(y2 / h * 1000))
+
+
+def _px_box_center(box_px: tuple) -> tuple:
+    return (round((box_px[0] + box_px[2]) / 2),
+            round((box_px[1] + box_px[3]) / 2))
+
+
 # ── Public API ──────────────────────────────────────────────────────────────
 
 def detect_move(api_key: str, image_path: str, move: str,
@@ -635,6 +757,20 @@ def detect_move(api_key: str, image_path: str, move: str,
             raw = _chat_completion(api_key, messages, model, temperature,
                                    reasoning_effort)
             det = parse_detection(raw, mv, game, img_w, img_h)
+
+    # For chess, recompute the pixel boxes from the detected board grid: the
+    # model reliably gets the from/to squares (verified above) but often
+    # mis-localizes a square's pixel box (e.g. Nc3's destination landed on c2).
+    # The detected grid gives exact, consistent boxes for both squares.
+    if game == "chess" and det.from_square and det.to_square and img_w and img_h:
+        board = _detect_chess_board(image_path)
+        if board:
+            sb_px = _square_px_box(board, det.from_square)
+            db_px = _square_px_box(board, det.to_square)
+            det.source_box = _px_to_norm_box(sb_px, img_w, img_h)
+            det.dest_box = _px_to_norm_box(db_px, img_w, img_h)
+            det.source_point = _px_box_center(sb_px)
+            det.dest_point = _px_box_center(db_px)
 
     if overlay_path:
         draw_detected_move(image_path, det, overlay_path)

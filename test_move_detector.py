@@ -187,10 +187,15 @@ def test_detect_move_end_to_end_stub():
     check('from_square e2', res.from_square == 'e2', str(res.from_square))
     check('to_square e4', res.to_square == 'e4', str(res.to_square))
     check('from_to tuple', res.from_to == ('e2', 'e4'), str(res.from_to))
-    check('source_box set', res.source_box == (531.0, 687.0, 594.0, 750.0),
+    # Boxes are overridden by the detected board grid (exact), not the model's.
+    check('source_box from grid', res.source_box == (385, 665, 435, 740),
           str(res.source_box))
-    check('dest_box set', res.dest_box == (531.0, 500.0, 594.0, 563.0),
+    check('dest_box from grid', res.dest_box == (385, 515, 435, 590),
           str(res.dest_box))
+    check('source_point from grid', res.source_point == (536, 608),
+          str(res.source_point))
+    check('dest_point from grid', res.dest_point == (536, 478),
+          str(res.dest_point))
     check('image_size read', res.image_size is not None, str(res.image_size))
     w, h = res.image_size
     check('source_point in bounds',
@@ -379,6 +384,51 @@ def test_detect_move_chess_retry_stub():
           and 'g1' in calls[-1][-2]['content'])
 
 
+def test_detect_chess_board():
+    print('[offline] _detect_chess_board (grid + square centers)')
+    board = md._detect_chess_board(PHOTO)
+    check('board detected', board is not None, str(board))
+    if board:
+        left, top, sw, sh = board
+        check('board left ~243', abs(left - 243) <= 4, str(left))
+        check('board top ~186', abs(top - 186) <= 6, str(top))
+        check('sq_w ~65', abs(sw - 65) <= 3, str(sw))
+        check('sq_h ~65', abs(sh - 65) <= 3, str(sh))
+        centers = {
+            'b1': (340, 674), 'c3': (406, 544), 'e2': (536, 608),
+            'e4': (536, 478), 'f3': (601, 544), 'g1': (666, 674),
+            'h3': (731, 544), 'a3': (276, 544),
+        }
+        for sq, exp in centers.items():
+            c = md._px_box_center(md._square_px_box(board, sq))
+            check(f'center {sq}',
+                  abs(c[0] - exp[0]) <= 5 and abs(c[1] - exp[1]) <= 5,
+                  f'{c} vs {exp}')
+    check('board cached', md._detect_chess_board(PHOTO) is board)
+
+
+def test_detect_move_box_override_stub():
+    print('[offline] detect_move overrides model boxes with grid boxes (stubbed)')
+    orig = md._chat_completion
+    md._chat_completion = lambda *a, **k: REPLY_E4  # model boxes for e2/e4
+    try:
+        det = md.detect_move('k', PHOTO, 'e4')
+    finally:
+        md._chat_completion = orig
+    check('from/to from model', det.from_to == ('e2', 'e4'), str(det.from_to))
+    # boxes come from the detected grid, not the model's REPLY_E4 boxes
+    check('source_box is grid box', det.source_box == (385, 665, 435, 740),
+          str(det.source_box))
+    check('dest_box is grid box', det.dest_box == (385, 515, 435, 590),
+          str(det.dest_box))
+    check('source_point is grid center', det.source_point == (536, 608),
+          str(det.source_point))
+    check('dest_point is grid center', det.dest_point == (536, 478),
+          str(det.dest_point))
+    check('model box not used',
+          det.source_box != (531.0, 687.0, 594.0, 750.0), str(det.source_box))
+
+
 # ── live test (key-gated) ───────────────────────────────────────────────────
 
 def test_live():
@@ -466,6 +516,30 @@ def test_live_knight():
               res.source_box is not None and res.dest_box is not None)
 
 
+def test_live_nc3_diag():
+    print('[live] Nc3 diagnostic (repeat, squares + boxes vs ground truth)')
+    api_key = os.environ.get('MISTRAL_API_KEY', '')
+    if not api_key:
+        print('  SKIP  MISTRAL_API_KEY not set')
+        return
+    # Ground truth (from the detected board grid on chess_start_large.png):
+    # b1 center (340, 674), c3 center (406, 544).
+    GT = {'b1': (340, 674), 'c3': (406, 544)}
+    for i in range(2):
+        res = md.detect_move(api_key, PHOTO, 'Nc3')
+        sp, dp = res.source_point, res.dest_point
+        sp_ok = sp and abs(sp[0]-GT['b1'][0]) <= 10 and abs(sp[1]-GT['b1'][1]) <= 10
+        dp_ok = dp and abs(dp[0]-GT['c3'][0]) <= 10 and abs(dp[1]-GT['c3'][1]) <= 10
+        print(f'  run {i+1}: {res.describe()}')
+        print(f'         from/to={res.from_to} src_pt={sp} dest_pt={dp} '
+              f'src_box={res.source_box} dest_box={res.dest_box}')
+        print(f'         raw={res.raw!r}')
+        check(f'run{i+1} from b1', res.from_square == 'b1', str(res.from_square))
+        check(f'run{i+1} to c3', res.to_square == 'c3', str(res.to_square))
+        check(f'run{i+1} source box on b1', bool(sp_ok), f'src_pt={sp}')
+        check(f'run{i+1} dest box on c3', bool(dp_ok), f'dest_pt={dp}')
+
+
 def main():
     test_extract_results()
     test_extract_boxes()
@@ -482,8 +556,11 @@ def main():
     test_geometry_ok()
     test_chess_corrective_prompt()
     test_detect_move_chess_retry_stub()
+    test_detect_chess_board()
+    test_detect_move_box_override_stub()
     test_live()
     test_live_knight()
+    test_live_nc3_diag()
     print()
     print(f'PASSED {PASS}  FAILED {FAIL}')
     sys.exit(1 if FAIL else 0)
