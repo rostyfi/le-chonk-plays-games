@@ -347,6 +347,17 @@ class AdvisorWindow(Gtk.ApplicationWindow):
         return (self.nudge_x_spin.get_value_as_int(),
                 self.nudge_y_spin.get_value_as_int())
 
+    def _detect_game(self) -> str:
+        """Detect the game from the active prompt title.
+
+        Returns 'chess' if the prompt title contains 'chess', 'solitaire'
+        if it contains 'solitaire' or 'klondike', otherwise 'chess' (default).
+        """
+        title = (self._active_prompt or "").lower()
+        if "solitaire" in title or "klondike" in title:
+            return "solitaire"
+        return "chess"
+
     def _on_nudge_reset(self, *_args):
         self.nudge_x_spin.set_value(0)
         self.nudge_y_spin.set_value(0)
@@ -586,9 +597,10 @@ class AdvisorWindow(Gtk.ApplicationWindow):
             GLib.idle_add(self._show_screenshot, tmp_path)
 
             # 3. Step 1 — Ask Mistral for the best move + extract move text
+            game = self._detect_game()
             advice, move_text = ask_best_move_parsed(
                 self.api_key, tmp_path,
-                game="chess",
+                game=game,
                 prompt=prompt_text,
             )
 
@@ -602,18 +614,18 @@ class AdvisorWindow(Gtk.ApplicationWindow):
             detection = None
             detector_debug = ""
             if move_text and mode in ("dry_run", "execute"):
-                det = detect_move(self.api_key, tmp_path, move_text, game="chess")
+                det = detect_move(self.api_key, tmp_path, move_text, game=game)
                 detection = det.describe()
 
                 # Build a debug view of what was sent to move_detector
                 from mistral_client import image_size as _img_size
                 iw, ih = _img_size(tmp_path)
-                sys_prompt = build_system_prompt("chess")
-                user_prompt = build_user_prompt(move_text, "chess", iw, ih)
+                sys_prompt = build_system_prompt(game)
+                user_prompt = build_user_prompt(move_text, game, iw, ih)
                 detector_debug = (
                     f"── move_detector request ──\n"
                     f"image: {tmp_path} ({iw}x{ih})\n"
-                    f"move: {move_text!r}  game: chess\n"
+                    f"move: {move_text!r}  game: {game}\n"
                     f"\n── system prompt ──\n{sys_prompt}\n"
                     f"\n── user prompt ──\n{user_prompt}\n"
                     f"\n── raw response ──\n{det.raw}\n"
