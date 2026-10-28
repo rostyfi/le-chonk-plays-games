@@ -658,12 +658,13 @@ class AdvisorWindow(Gtk.ApplicationWindow):
                 if det.source_point and det.dest_point:
                     sx, sy = det.source_point
                     dx, dy = det.dest_point
-                    # For Solitaire: offset source downward — the top of the
-                    # card may be covered by face-down cards in the column.
-                    # Grab from the lower (visible) portion of the card.
+                    # For Solitaire: grab from the lower portion of the source
+                    # card — the top may be covered by face-down cards in the
+                    # column. Use 80% of box height from the top (near bottom).
                     if game == "solitaire" and det.source_box:
+                        box_top = det.source_box[1] / 1000 * ih
                         box_h = (det.source_box[3] - det.source_box[1]) / 1000 * ih
-                        sy += int(box_h * 0.3)  # shift down by 30% of card height
+                        sy = int(box_top + box_h * 0.8)
                     actions.append(Action(
                         type='drag', x1=sx, y1=sy, x2=dx, y2=dy,
                         raw=f"move_detector: {det.description or det.from_square}",
@@ -806,10 +807,30 @@ class AdvisorWindow(Gtk.ApplicationWindow):
             log.append("Move verified.")
             return log, post_path
 
-        # Solitaire: drag is the only supported interaction — don't retry
-        # with clicks, just report the failure
+        # Solitaire: retry drag with adjusted grab point (60% of box height
+        # instead of 80%) before giving up — the first grab point may have
+        # been on a face-down card
         if game == "solitaire":
-            log.append("Board unchanged — drag did not register (Solitaire uses drag only).")
+            log.append("Board unchanged — retrying drag with adjusted grab point...")
+            retry_actions = []
+            for a in actions:
+                if a.type == "drag" and a.x1 is not None:
+                    # Shift grab point up: from 80% to 60% of original offset
+                    retry_actions.append(Action(
+                        type='drag', x1=a.x1, y1=a.y1 - 15,
+                        x2=a.x2, y2=a.y2, raw=a.raw + " (retry)",
+                    ))
+                else:
+                    retry_actions.append(a)
+            retry_screen = offset_actions(retry_actions, dx, dy)
+            log += execute_actions(retry_screen, dry_run=False)
+            self._move_pointer_away(geom)
+            time.sleep(0.5)
+            post_path = self._capture_window_image(win)
+            if move_changed_board(pre_path, post_path, actions, boxes):
+                log.append("Move verified (adjusted grab point worked).")
+            else:
+                log.append("Board still unchanged — drag did not register.")
             return log, post_path
 
         log.append("Board unchanged — retrying with click-click...")
