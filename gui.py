@@ -526,9 +526,9 @@ class AdvisorWindow(Gtk.ApplicationWindow):
 
                 if det.source_point and det.dest_point:
                     sx, sy = det.source_point
-                    dy_px, dx_px = det.dest_point
+                    dx, dy = det.dest_point
                     actions.append(Action(
-                        type='drag', x1=sx, y1=sy, x2=dx_px, y2=dy_px,
+                        type='drag', x1=sx, y1=sy, x2=dx, y2=dy,
                         raw=f"move_detector: {det.from_square} -> {det.to_square}",
                     ))
 
