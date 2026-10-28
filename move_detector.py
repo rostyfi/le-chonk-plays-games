@@ -109,6 +109,15 @@ def build_system_prompt(game: str = "chess") -> str:
         '{"box_2d": [531, 500, 594, 563], "label": "destination"} '
         "from: e2 "
         "to: e4 "
+        "The move notation may give only the piece type and the destination "
+        "(e.g. \"Nf3\" gives no source square, and several knights may exist). "
+        "In that case READ THE BOARD: find every piece of that type, and "
+        "determine which one can LEGALLY move to the destination square (a "
+        "knight moves in an L: 2 squares one way + 1 square perpendicular; a "
+        "pawn moves forward; a bishop diagonally; etc.). That piece's square "
+        "is the SOURCE. Always check that source -> destination is a legal "
+        "move for that piece before reporting — do NOT guess and do NOT "
+        "default to a square. "
         "If the move cannot be located on the board, output 'BOXES: NONE' "
         "and 'SQUARES: NONE'."
     )
@@ -124,8 +133,10 @@ def build_user_prompt(move: str, game: str = "chess",
         f"The image shows a game of {game}.{size} "
         f'The player wants to play the move "{move}". Detect the source '
         f"square (the piece being moved) and the destination square (the "
-        f"square it moves to). Report their bounding boxes (labels 'source' "
-        f"and 'destination') and the from/to squares."
+        f"square it moves to). If the notation does not specify the source "
+        f"square, use the board to find the piece that can legally make the "
+        f"move. Report their bounding boxes (labels 'source' and "
+        f"'destination') and the from/to squares."
     )
 
 
@@ -205,8 +216,29 @@ def _extract_text(message: dict) -> str:
     return str(content)
 
 
-def _build_payload(image_path: str, user_prompt: str, system_prompt: str,
-                   model: str, temperature: float,
+# ── Chat message helpers ────────────────────────────────────────────────────
+
+def _msg_system(text: str) -> dict:
+    return {"role": "system", "content": text}
+
+
+def _msg_user_text(text: str) -> dict:
+    return {"role": "user", "content": text}
+
+
+def _msg_assistant(text: str) -> dict:
+    return {"role": "assistant", "content": text}
+
+
+def _msg_user_image(text: str, image_b64: str, mime_type: str) -> dict:
+    return {"role": "user", "content": [
+        {"type": "text", "text": text},
+        {"type": "image_url",
+         "image_url": {"url": f"data:{mime_type};base64,{image_b64}"}},
+    ]}
+
+
+def _build_payload(messages: list, model: str, temperature: float,
                    reasoning_effort: str = "none") -> dict:
     """Build the chat-completions request payload.
 
@@ -215,17 +247,9 @@ def _build_payload(image_path: str, user_prompt: str, system_prompt: str,
     reasoning_effort defaults to "none" (no chain-of-thought), matching the
     deterministic, token-light behaviour used elsewhere in this project.
     """
-    image_b64, mime_type = _encode_image(image_path)
     return {
         "model": model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": [
-                {"type": "text", "text": user_prompt},
-                {"type": "image_url",
-                 "image_url": {"url": f"data:{mime_type};base64,{image_b64}"}},
-            ]},
-        ],
+        "messages": messages,
         "temperature": temperature,
         "top_p": 1,
         "reasoning_effort": reasoning_effort,
@@ -233,13 +257,15 @@ def _build_payload(image_path: str, user_prompt: str, system_prompt: str,
     }
 
 
-def _chat_completion(api_key: str, image_path: str, user_prompt: str,
-                     system_prompt: str, model: str,
+def _chat_completion(api_key: str, messages: list, model: str,
                      temperature: float = 0.0,
                      reasoning_effort: str = "none", timeout: int = 600) -> str:
-    """Send image + prompts to the Mistral endpoint. Returns the reply text."""
-    payload = _build_payload(image_path, user_prompt, system_prompt,
-                             model, temperature, reasoning_effort)
+    """Send a messages list to the Mistral endpoint. Returns the reply text.
+
+    The image (if any) must already be embedded in a user message via
+    _msg_user_image. Supports multi-turn (history) for self-correction retries.
+    """
+    payload = _build_payload(messages, model, temperature, reasoning_effort)
 
     req = urllib.request.Request(
         MISTRAL_API_URL,
@@ -447,6 +473,106 @@ def draw_detected_move(image_path: str, det: DetectedMove,
     return out_path
 
 
+# ── Chess self-correction (deterministic legality check + retry) ─────────────
+#
+# A move like "Nf3" does not name the source square — several knights may
+# exist, so the model must read the board to pick the one that can legally
+# reach the destination. Models sometimes guess the wrong source (e.g. report
+# g1 for "Nc3", but g1 -> c3 is not a legal knight move). To make detection
+# reliable we validate the reported source -> destination against the move's
+# geometry (no board needed) and, if it is illegal, ask the model to re-examine
+# the board and try again.
+
+_PIECE_NAMES = {'N': 'knight', 'B': 'bishop', 'R': 'rook',
+                'Q': 'queen', 'K': 'king'}
+
+
+def _parse_san(move: str) -> dict:
+    """Parse a chess move in SAN-like notation into its components.
+
+    Returns {'piece': 'N'|'B'|'R'|'Q'|'K'|'P', 'capture': bool, 'to': 'e4',
+    'castle': bool, 'promo': str|None}. Only geometry-relevant parts are
+    extracted; this is NOT a full chess rules engine.
+    """
+    s = move.strip()
+    if s in ('O-O', '0-0', 'O-O-O', '0-0-0'):
+        return {'piece': 'K', 'capture': False, 'to': None,
+                'castle': True, 'promo': None}
+    promo = None
+    if '=' in s:
+        s, promo = s.split('=', 1)
+        promo = promo[:1] or None
+    piece = 'P'
+    if s and s[0] in 'NBRQK':
+        piece = s[0]
+        s = s[1:]
+    capture = 'x' in s
+    if capture:
+        s = s.replace('x', '')
+    to = s[-2:].lower() if len(s) >= 2 else None
+    return {'piece': piece, 'capture': capture, 'to': to,
+            'castle': False, 'promo': promo}
+
+
+def _sq_rc(sq: str) -> tuple[int, int]:
+    """Square -> (file, rank), both 0-based: a1 -> (0, 0), h8 -> (7, 7)."""
+    return (ord(sq[0].lower()) - ord('a'), int(sq[1]) - 1)
+
+
+def _geometry_ok(piece: str, frm: str, to: str) -> Optional[bool]:
+    """Is frm -> to a legal move SHAPE for the piece? (No board needed.)
+
+    Returns True/False, or None if it cannot be decided without the board
+    (pawns need colour/occupancy; castling is handled separately).
+    """
+    if not frm or not to or len(frm) != 2 or len(to) != 2:
+        return None
+    fc, fr = _sq_rc(frm)
+    tc, tr = _sq_rc(to)
+    df, dr = tc - fc, tr - fr
+    adf, adr = abs(df), abs(dr)
+    if piece == 'N':
+        return (adr, adf) in ((1, 2), (2, 1))
+    if piece == 'B':
+        return adr == adf and adr > 0
+    if piece == 'R':
+        return (adr == 0) != (adf == 0)
+    if piece == 'Q':
+        return (adr == adf and adr > 0) or ((adr == 0) != (adf == 0))
+    if piece == 'K':
+        return max(adr, adf) == 1
+    return None  # pawn / unknown — needs the board
+
+
+def _chess_corrective_prompt(move: str, det: DetectedMove) -> Optional[str]:
+    """If the model's from/to is not a legal move for the piece, build a
+    corrective follow-up message; otherwise return None (no retry needed)."""
+    info = _parse_san(move)
+    piece = info['piece']
+    if piece not in _PIECE_NAMES:
+        return None
+    pname = _PIECE_NAMES[piece]
+    to = det.to_square or info['to']
+    if det.from_square is None:
+        return (
+            f'For the move "{move}" you did not report a source square. '
+            f'Re-examine the board: find the {pname} that can legally reach '
+            f'{to} and report ITS square as the source. Reply in the same '
+            f'format (two box_2d dictionaries, then from:/to: lines).'
+        )
+    if _geometry_ok(piece, det.from_square, det.to_square) is False:
+        return (
+            f'Your previous answer said source {det.from_square} and '
+            f'destination {det.to_square} for "{move}", but '
+            f'{det.from_square} -> {det.to_square} is NOT a legal {pname} '
+            f'move. Re-examine the board: find the {pname} that can legally '
+            f'reach {det.to_square} and report ITS square as the source. '
+            f'Reply in the same format (two box_2d dictionaries, then '
+            f'from:/to: lines).'
+        )
+    return None
+
+
 # ── Public API ──────────────────────────────────────────────────────────────
 
 def detect_move(api_key: str, image_path: str, move: str,
@@ -473,6 +599,11 @@ def detect_move(api_key: str, image_path: str, move: str,
     overlay_path:    if given, draw the detected move (source/destination
                      boxes + drag arrow) on the picture and save it here.
 
+    For chess, the reported source -> destination is checked against the
+    move's geometry; if it is illegal (e.g. a knight move whose source was
+    not in the notation), the model is asked to re-examine the board and
+    retry (up to 2 times).
+
     Returns a DetectedMove (with .overlay_path set when a picture was drawn).
     Raises RuntimeError on API/transport errors.
     """
@@ -481,12 +612,30 @@ def detect_move(api_key: str, image_path: str, move: str,
     if not move or not move.strip():
         raise ValueError("move is required (e.g. 'e4')")
 
+    mv = move.strip()
     img_w, img_h = _image_size(image_path)
+    image_b64, mime_type = _encode_image(image_path)
     system_prompt = build_system_prompt(game)
-    user_prompt = build_user_prompt(move.strip(), game, img_w, img_h)
-    raw = _chat_completion(api_key, image_path, user_prompt, system_prompt,
-                           model, temperature, reasoning_effort)
-    det = parse_detection(raw, move.strip(), game, img_w, img_h)
+    user_prompt = build_user_prompt(mv, game, img_w, img_h)
+    messages = [_msg_system(system_prompt),
+                _msg_user_image(user_prompt, image_b64, mime_type)]
+    raw = _chat_completion(api_key, messages, model, temperature, reasoning_effort)
+    det = parse_detection(raw, mv, game, img_w, img_h)
+
+    # Chess self-correction: if the reported source -> destination is not a
+    # legal move for the piece (e.g. a knight whose source was not in the
+    # notation), ask the model to re-examine the board and try again.
+    if game == "chess":
+        for _ in range(2):
+            corrective = _chess_corrective_prompt(mv, det)
+            if corrective is None:
+                break
+            messages.append(_msg_assistant(raw))
+            messages.append(_msg_user_text(corrective))
+            raw = _chat_completion(api_key, messages, model, temperature,
+                                   reasoning_effort)
+            det = parse_detection(raw, mv, game, img_w, img_h)
+
     if overlay_path:
         draw_detected_move(image_path, det, overlay_path)
         det.overlay_path = overlay_path

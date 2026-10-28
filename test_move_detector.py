@@ -125,22 +125,22 @@ def test_box_center_px():
 
 def test_build_payload():
     print('[offline] _build_payload (greedy sampling requires top_p=1)')
-    p = md._build_payload(PHOTO, 'detect e4', 'system-prompt', md.MODEL, 0.0)
+    image_b64, mime = md._encode_image(PHOTO)
+    msgs = [md._msg_system('system-prompt'),
+            md._msg_user_image('detect e4', image_b64, mime)]
+    p = md._build_payload(msgs, md.MODEL, 0.0)
     check('top_p is 1', p.get('top_p') == 1, str(p.get('top_p')))
     check('temperature 0 (greedy)', p.get('temperature') == 0.0,
           str(p.get('temperature')))
     check('reasoning_effort none (default)', p.get('reasoning_effort') == 'none',
           str(p.get('reasoning_effort')))
-    p2 = md._build_payload(PHOTO, 'x', 's', md.MODEL, 0.0, reasoning_effort='high')
-    check('reasoning_effort configurable', p2.get('reasoning_effort') == 'high',
-          str(p2.get('reasoning_effort')))
     check('model set', p.get('model') == md.MODEL, str(p.get('model')))
-    msgs = p['messages']
+    check('messages passed through', p['messages'] is msgs)
     check('system+user messages',
-          len(msgs) == 2 and msgs[0]['role'] == 'system'
-          and msgs[1]['role'] == 'user',
-          str([m['role'] for m in msgs]))
-    content = msgs[1]['content']
+          len(p['messages']) == 2 and p['messages'][0]['role'] == 'system'
+          and p['messages'][1]['role'] == 'user',
+          str([m['role'] for m in p['messages']]))
+    content = p['messages'][1]['content']
     types = [c['type'] for c in content]
     check('user content text+image_url', types == ['text', 'image_url'],
           str(types))
@@ -148,7 +148,10 @@ def test_build_payload():
           content[1]['image_url']['url'].startswith('data:image/'),
           content[1]['image_url']['url'][:30])
     check('text prompt embedded', 'detect e4' in content[0]['text'])
-    check('system prompt embedded', msgs[0]['content'] == 'system-prompt')
+    check('system prompt embedded', p['messages'][0]['content'] == 'system-prompt')
+    p2 = md._build_payload(msgs, md.MODEL, 0.0, reasoning_effort='high')
+    check('reasoning_effort configurable', p2.get('reasoning_effort') == 'high',
+          str(p2.get('reasoning_effort')))
 
 
 def test_build_user_prompt():
@@ -167,13 +170,11 @@ def test_detect_move_end_to_end_stub():
     # Stub the network call so we test prompt -> "API" -> parse with no key.
     captured = {}
 
-    def fake_chat(api_key, image_path, user_prompt, system_prompt, model,
-                  temperature=0.0, timeout=600):
-        captured['api_key'] = api_key
-        captured['image_path'] = image_path
-        captured['user_prompt'] = user_prompt
-        captured['system_prompt'] = system_prompt
+    def fake_chat(api_key, messages, model, temperature=0.0,
+                  reasoning_effort='none', timeout=600):
+        captured['messages'] = messages
         captured['model'] = model
+        captured['api_key'] = api_key
         return REPLY_E4
 
     orig = md._chat_completion
@@ -203,11 +204,14 @@ def test_detect_move_end_to_end_stub():
           f'src={res.source_point} dest={res.dest_point}')
     check('raw preserved', res.raw == REPLY_E4)
     check('model passed through', captured['model'] == md.MODEL)
-    check('system prompt mentions box_2d',
-          'box_2d' in captured['system_prompt'])
-    check('user prompt mentions move', '"e4"' in captured['user_prompt'])
-    check('user prompt has image size', f'{w}x{h}' in captured['user_prompt'],
-          captured['user_prompt'])
+    msgs = captured['messages']
+    check('system prompt mentions box_2d', 'box_2d' in msgs[0]['content'])
+    user_content = msgs[1]['content']
+    user_text = user_content[0]['text']
+    check('user prompt mentions move', '"e4"' in user_text, user_text)
+    check('user prompt has image size', f'{w}x{h}' in user_text, user_text)
+    check('user content has image_url',
+          any(c.get('type') == 'image_url' for c in user_content))
     check('describe()', 'e2 -> e4' in res.describe(), res.describe())
 
 
@@ -284,6 +288,97 @@ def test_detect_and_draw_stub():
           has_color_near(px, mid[0], mid[1], md.MOVE_COLOR))
 
 
+def test_parse_san():
+    print('[offline] _parse_san')
+    check('Nf3 piece N', md._parse_san('Nf3')['piece'] == 'N')
+    check('Nf3 to f3', md._parse_san('Nf3')['to'] == 'f3')
+    check('Nc3 piece N', md._parse_san('Nc3')['piece'] == 'N')
+    check('Nc3 to c3', md._parse_san('Nc3')['to'] == 'c3')
+    check('e4 piece P', md._parse_san('e4')['piece'] == 'P')
+    check('e4 to e4', md._parse_san('e4')['to'] == 'e4')
+    check('exd5 capture', md._parse_san('exd5')['capture'] is True)
+    check('exd5 to d5', md._parse_san('exd5')['to'] == 'd5')
+    check('O-O castle', md._parse_san('O-O')['castle'] is True)
+    check('O-O piece K', md._parse_san('O-O')['piece'] == 'K')
+    check('e8=Q promo', md._parse_san('e8=Q')['promo'] == 'Q')
+    check('Qh4 piece Q', md._parse_san('Qh4')['piece'] == 'Q')
+
+
+def test_geometry_ok():
+    print('[offline] _geometry_ok (move shape per piece)')
+    check('N g1->f3 ok', md._geometry_ok('N', 'g1', 'f3') is True)
+    check('N b1->c3 ok', md._geometry_ok('N', 'b1', 'c3') is True)
+    check('N g1->c3 ILLEGAL', md._geometry_ok('N', 'g1', 'c3') is False)
+    check('N g1->g1 ILLEGAL', md._geometry_ok('N', 'g1', 'g1') is False)
+    check('B f1->c4 ok', md._geometry_ok('B', 'f1', 'c4') is True)
+    check('B f1->f4 ILLEGAL', md._geometry_ok('B', 'f1', 'f4') is False)
+    check('R a1->a8 ok', md._geometry_ok('R', 'a1', 'a8') is True)
+    check('R a1->b8 ILLEGAL', md._geometry_ok('R', 'a1', 'b8') is False)
+    check('Q d1->d8 ok', md._geometry_ok('Q', 'd1', 'd8') is True)
+    check('Q d1->d4 ok (straight)', md._geometry_ok('Q', 'd1', 'd4') is True)
+    check('Q d1->g4 ok (diagonal)', md._geometry_ok('Q', 'd1', 'g4') is True)
+    check('Q d1->e3 ILLEGAL (knight shape)',
+          md._geometry_ok('Q', 'd1', 'e3') is False)
+    check('K e1->e2 ok', md._geometry_ok('K', 'e1', 'e2') is True)
+    check('K e1->e3 ILLEGAL', md._geometry_ok('K', 'e1', 'e3') is False)
+    check('Pawn needs board -> None', md._geometry_ok('P', 'e2', 'e4') is None)
+
+
+def test_chess_corrective_prompt():
+    print('[offline] _chess_corrective_prompt')
+    w, h = md._image_size(PHOTO)
+    wrong = md.parse_detection(
+        '{"box_2d": [487,740,536,813], "label":"source"} '
+        '{"box_2d": [386,667,435,740], "label":"destination"} from: g1 to: c3',
+        'Nc3', 'chess', w, h)
+    msg = md._chess_corrective_prompt('Nc3', wrong)
+    check('retry for illegal knight move', msg is not None)
+    check('mentions NOT a legal', 'NOT a legal' in msg, msg)
+    check('mentions knight', 'knight' in msg, msg)
+    right = md.parse_detection(
+        '{"box_2d": [237,740,288,813], "label":"source"} '
+        '{"box_2d": [289,519,338,582], "label":"destination"} from: b1 to: c3',
+        'Nc3', 'chess', w, h)
+    check('no retry for legal knight move',
+          md._chess_corrective_prompt('Nc3', right) is None)
+    pawn = md.parse_detection(REPLY_E4, 'e4', 'chess', w, h)
+    check('no retry for pawn move',
+          md._chess_corrective_prompt('e4', pawn) is None)
+
+
+def test_detect_move_chess_retry_stub():
+    print('[offline] detect_move chess self-correction retry (HTTP stubbed)')
+    WRONG = ('{"box_2d": [487,740,536,813], "label":"source"} '
+             '{"box_2d": [386,667,435,740], "label":"destination"} '
+             'from: g1 to: c3')
+    RIGHT = ('{"box_2d": [237,740,288,813], "label":"source"} '
+             '{"box_2d": [289,519,338,582], "label":"destination"} '
+             'from: b1 to: c3')
+    calls = []
+
+    def fake_chat(api_key, messages, model, temperature=0.0,
+                  reasoning_effort='none', timeout=600):
+        calls.append(messages)
+        return WRONG if len(calls) == 1 else RIGHT
+
+    orig = md._chat_completion
+    md._chat_completion = fake_chat
+    try:
+        det = md.detect_move('k', PHOTO, 'Nc3')
+    finally:
+        md._chat_completion = orig
+    check('retry happened (2 API calls)', len(calls) == 2, f'{len(calls)} calls')
+    check('final from b1', det.from_square == 'b1', str(det.from_square))
+    check('final to c3', det.to_square == 'c3', str(det.to_square))
+    last_user = calls[-1][-1]
+    check('follow-up is a user msg', last_user['role'] == 'user')
+    check('corrective mentions illegal move',
+          'NOT a legal' in last_user['content'], last_user['content'])
+    check('assistant msg carries the wrong answer',
+          calls[-1][-2]['role'] == 'assistant'
+          and 'g1' in calls[-1][-2]['content'])
+
+
 # ── live test (key-gated) ───────────────────────────────────────────────────
 
 def test_live():
@@ -334,6 +429,43 @@ def test_live():
         check('live overlay arrow at midpoint', False, 'no points to draw')
 
 
+def test_live_knight():
+    print('[live] knight moves (source not in the notation — needs the board)')
+    api_key = os.environ.get('MISTRAL_API_KEY', '')
+    if not api_key:
+        print('  SKIP  MISTRAL_API_KEY not set (offline tests still validate the code)')
+        return
+    # Start position, White to move. For "Nf3"/"Nc3" the notation gives only
+    # the destination — the model must read the board to pick the right knight.
+    cases = [
+        ('Nf3', 'g1', 'f3'),
+        ('Nc3', 'b1', 'c3'),
+        ('Nh3', 'g1', 'h3'),
+        ('Na3', 'b1', 'a3'),
+    ]
+    orig_chat = md._chat_completion
+    for mv, exp_from, exp_to in cases:
+        calls = []
+
+        def counting_chat(*a, _calls=calls, **k):
+            _calls.append(1)
+            return orig_chat(*a, **k)
+
+        md._chat_completion = counting_chat
+        try:
+            res = md.detect_move(api_key, PHOTO, mv)
+        finally:
+            md._chat_completion = orig_chat
+        print(f'  {mv}: {res.describe()}  (api calls: {len(calls)})')
+        print(f'    raw: {res.raw!r}')
+        check(f'live {mv} from {exp_from}', res.from_square == exp_from,
+              f'got {res.from_square!r} expected {exp_from!r}')
+        check(f'live {mv} to {exp_to}', res.to_square == exp_to,
+              f'got {res.to_square!r} expected {exp_to!r}')
+        check(f'live {mv} boxes present',
+              res.source_box is not None and res.dest_box is not None)
+
+
 def main():
     test_extract_results()
     test_extract_boxes()
@@ -346,7 +478,12 @@ def main():
     test_detect_move_from_to_stub()
     test_draw_detected_move()
     test_detect_and_draw_stub()
+    test_parse_san()
+    test_geometry_ok()
+    test_chess_corrective_prompt()
+    test_detect_move_chess_retry_stub()
     test_live()
+    test_live_knight()
     print()
     print(f'PASSED {PASS}  FAILED {FAIL}')
     sys.exit(1 if FAIL else 0)
