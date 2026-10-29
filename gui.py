@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Card Game Advisor — native GTK4 desktop UI.
+Le Chonk plays games — native GTK4 desktop UI.
 
 Window selector, screenshot preview, AI move advice, a prompt library
 (titled prompts saved to prompts.json), and auto-move execution.
@@ -25,9 +25,9 @@ from gi.repository import Gtk, Gdk, GdkPixbuf, GLib, Gio
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from screenshot import X11WindowCapture, save_full_screenshot
+from screenshot import X11WindowCapture
 from mistral_client import ask_best_move_parsed
-from prompt_loader import ensure_prompts_file, save_prompts, get_behavior
+from prompt_loader import ensure_prompts_file, save_prompts
 from move_parser import (Action, execute_actions, offset_actions,
                         extract_boxes, drag_to_clicks)
 from move_detector import detect_move, build_system_prompt, build_user_prompt
@@ -37,7 +37,7 @@ from input_controller import X11Input
 
 class AdvisorWindow(Gtk.ApplicationWindow):
     def __init__(self, app, api_key: str):
-        super().__init__(application=app, title="Card Game Advisor")
+        super().__init__(application=app, title="Le Chonk plays games")
         self.api_key = api_key
         self.set_default_size(1000, 760)
 
@@ -106,7 +106,7 @@ class AdvisorWindow(Gtk.ApplicationWindow):
         self.play_btn = Gtk.Button(label="Play")
         self.play_btn.connect("clicked", self._on_play)
         self.play_btn.get_style_context().add_class("suggested-action")
-        self.play_btn.set_tooltip_text("Auto-play in a loop (5s between moves)")
+        self.play_btn.set_tooltip_text("Auto-play in a loop (no delay between moves)")
         btn_bar.append(self.play_btn)
 
         self.stop_btn = Gtk.Button(label="Stop")
@@ -139,15 +139,17 @@ class AdvisorWindow(Gtk.ApplicationWindow):
         nudge_reset.connect("clicked", self._on_nudge_reset)
         nudge_bar.append(nudge_reset)
 
-        # ── Reasoning level: None / Max ──
+        # ── Reasoning level: Low / None / Max ──
         nudge_bar.append(Gtk.Label(label="  Reasoning:"))
         self.reasoning_model = Gio.ListStore(item_type=Gtk.StringObject)
+        self.reasoning_model.append(Gtk.StringObject.new("Low (default)"))
         self.reasoning_model.append(Gtk.StringObject.new("None (fast)"))
         self.reasoning_model.append(Gtk.StringObject.new("Max (think)"))
         self.reasoning_dropdown = Gtk.DropDown(model=self.reasoning_model)
         self.reasoning_dropdown.set_selected(0)
         self.reasoning_dropdown.set_tooltip_text(
-            "AI reasoning level for move advice: None = fast, Max = extended thinking"
+            "AI reasoning level for move advice: Low = light thinking, "
+            "None = fast, Max = extended thinking"
         )
         nudge_bar.append(self.reasoning_dropdown)
 
@@ -273,7 +275,7 @@ class AdvisorWindow(Gtk.ApplicationWindow):
             return
 
         # Filter out our own window and tiny utility windows
-        my_title = "Card Game Advisor"
+        my_title = "Le Chonk plays games"
         for w in windows:
             name = w["name"] or "(unnamed)"
             if name == my_title:
@@ -361,9 +363,10 @@ class AdvisorWindow(Gtk.ApplicationWindow):
                 self.nudge_y_spin.get_value_as_int())
 
     def _current_reasoning(self) -> str:
-        """Return 'none' or 'max' based on the reasoning dropdown selection."""
+        """Return 'low', 'none', or 'max' based on the reasoning dropdown selection."""
         idx = self.reasoning_dropdown.get_selected()
-        return "max" if idx == 1 else "none"
+        levels = ("low", "none", "max")
+        return levels[idx] if 0 <= idx < len(levels) else "low"
 
     def _get_active_prompt_config(self) -> tuple[str, dict]:
         """Return (game_key, behavior) for the currently selected prompt.
@@ -487,8 +490,8 @@ class AdvisorWindow(Gtk.ApplicationWindow):
 
     def _play_loop_worker(self, win: dict, prompt_text: str,
                           nudge: tuple[int, int] = (0, 0),
-                          reasoning: str = "none"):
-        """Auto-play loop: capture → AI → detect → execute → wait 5s → repeat.
+                          reasoning: str = "low"):
+        """Auto-play loop: capture → AI → detect → execute → repeat.
 
         Runs until _stop_requested is set or an error occurs.
         """
@@ -508,16 +511,6 @@ class AdvisorWindow(Gtk.ApplicationWindow):
 
                 if self._stop_requested:
                     break
-
-                # Wait 5 seconds, checking for stop every 0.5s
-                GLib.idle_add(
-                    self.status_label.set_label,
-                    f"Move #{move_count} done. Next move in 5s... (press Stop to halt)",
-                )
-                for _ in range(10):
-                    if self._stop_requested:
-                        break
-                    time.sleep(0.5)
 
             GLib.idle_add(
                 self.status_label.set_label,
@@ -593,7 +586,7 @@ class AdvisorWindow(Gtk.ApplicationWindow):
 
     def _worker(self, win: dict, prompt_text: str, mode: str,
                 nudge: tuple[int, int] = (0, 0),
-                reasoning: str = "none"):
+                reasoning: str = "low"):
         """
         Background thread: two-step auto-play flow.
         Step 1 — capture screenshot → AI → best move text (e.g. "Nf3").
@@ -715,11 +708,6 @@ class AdvisorWindow(Gtk.ApplicationWindow):
             # 5. Execute (or dry-run)
             exec_log: list[str] = []
             if screen_actions and mode == "execute":
-                # Save a full-screen screenshot before the move
-                try:
-                    save_full_screenshot(prefix=f"pre_{game_key}")
-                except Exception as e:
-                    print(f"  Warning: full-screen screenshot failed: {e}", file=sys.stderr)
                 GLib.idle_add(
                     self.status_label.set_label,
                     "Executing in 1.5s — keep your mouse still...",

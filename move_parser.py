@@ -132,91 +132,6 @@ def extract_boxes(response: str) -> dict | None:
     return None
 
 
-def boxes_to_drag(boxes: dict, img_w: int, img_h: int) -> Action:
-    """
-    Build a DRAG action from normalized (0-1000) bounding boxes: start at the
-    center of the source box, end at the center of the destination box.
-    """
-    def center(box, w, h):
-        x1, y1, x2, y2 = (max(0.0, min(1000.0, v)) for v in box)
-        return round((x1 + x2) / 2 / 1000 * w), round((y1 + y2) / 2 / 1000 * h)
-
-    x1, y1 = center(boxes['source'], img_w, img_h)
-    x2, y2 = center(boxes['dest'], img_w, img_h)
-    return Action(
-        type='drag', x1=x1, y1=y1, x2=x2, y2=y2,
-        raw=f"BOXES source={boxes['source']} dest={boxes['dest']}",
-    )
-
-
-def parse_actions_with_boxes(response: str, img_w: int = None,
-                             img_h: int = None) -> list[Action]:
-    """
-    Parse actions from the response. When a BOXES section is present, the
-    DRAG is derived from it (box centers computed exactly in pixels) and
-    placed first; remaining ACTION commands (CLICK, DOUBLE_CLICK, WAIT, ...)
-    follow. Falls back to the plain ACTION block when no usable boxes exist.
-    """
-    parsed = parse_actions(response)
-    boxes = extract_boxes(response)
-    if boxes and img_w and img_h:
-        drag = boxes_to_drag(boxes, img_w, img_h)
-        others = [a for a in parsed if a.type != 'drag']
-        return [drag] + others
-    return parsed
-
-
-CENTER_LINE = re.compile(
-    r'(source|dest(?:ination)?)\b[^:\n]{0,15}:\s*\(\s*(-?\d+(?:\.\d+)?)\s*[, ]\s*'
-    r'(-?\d+(?:\.\d+)?)\s*\)',
-    re.IGNORECASE
-)
-
-
-def extract_centers(response: str) -> dict | None:
-    """
-    Extract the CENTERS section: the move endpoints as pixel centers.
-    Returns {'source': (x, y), 'dest': (x, y)} (pixels) or None.
-    """
-    if re.search(r'CENTERS\s*:\s*NONE', response, re.IGNORECASE):
-        return None
-    centers = {}
-    for m in CENTER_LINE.finditer(response):
-        label = m.group(1).lower()
-        point = (float(m.group(2)), float(m.group(3)))
-        if label.startswith('source'):
-            centers['source'] = point
-        elif label.startswith('dest'):
-            centers['dest'] = point
-    if 'source' in centers and 'dest' in centers:
-        return centers
-    return None
-
-
-def parse_move_actions(response: str, img_w: int = None,
-                       img_h: int = None) -> list[Action]:
-    """
-    Parse the move actions from the response.
-    The DRAG endpoints come from the CENTERS section (pixel centers, used
-    exactly as written) when present; otherwise from the BOXES section
-    (normalized 0-1000 boxes, centers computed in pixels). Remaining ACTION
-    commands (CLICK, DOUBLE_CLICK, WAIT, ...) follow the DRAG. Falls back to
-    the plain ACTION block when neither section is usable.
-    """
-    parsed = parse_actions(response)
-    centers = extract_centers(response)
-    if centers:
-        drag = Action(
-            type='drag',
-            x1=round(centers['source'][0]), y1=round(centers['source'][1]),
-            x2=round(centers['dest'][0]), y2=round(centers['dest'][1]),
-            raw=f"CENTERS source={centers['source']} dest={centers['dest']}",
-        )
-        others = [a for a in parsed if a.type != 'drag']
-        return [drag] + others
-    return parse_actions_with_boxes(response, img_w, img_h)
-
-
 def drag_to_clicks(actions: list[Action]) -> list[Action]:
     """
     Convert the DRAG action into CLICK source + CLICK destination, keeping
@@ -283,17 +198,6 @@ def extract_action_block(response: str) -> str:
         return match.group(1).strip()
     # Fallback: look for any action-like lines in the whole response
     return response
-
-
-def extract_move_description(response: str) -> str:
-    """
-    Extract the MOVE: one-sentence description from the AI response.
-    Returns empty string if not found.
-    """
-    match = re.search(r'MOVE:\s*(.+)', response, re.IGNORECASE)
-    if match:
-        return match.group(1).strip()
-    return ""
 
 
 # Algebraic move patterns for extraction from natural-language advice.
@@ -507,16 +411,6 @@ def execute_actions(actions: list[Action], dry_run: bool = False,
             inp.close()
 
     return log
-
-
-def parse_and_execute(response: str, dry_run: bool = False) -> tuple[list[Action], list[str]]:
-    """
-    Convenience: parse actions from AI response and execute them.
-    Returns (actions, execution_log).
-    """
-    actions = parse_actions(response)
-    log = execute_actions(actions, dry_run=dry_run)
-    return actions, log
 
 
 if __name__ == '__main__':

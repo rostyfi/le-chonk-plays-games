@@ -150,11 +150,6 @@ def get_active_prompt() -> dict | None:
     return prompts[0] if prompts else None
 
 
-def get_behavior(prompt: dict) -> dict:
-    """Return the behaviour config dict from a prompt (empty dict if none)."""
-    return prompt.get("behavior", {}) if prompt else {}
-
-
 # ── Detector prompts (step 2: where to move on screen) ─────────────
 
 def get_detector_system(game_key: str) -> str:
@@ -197,11 +192,6 @@ def build_detector_user_prompt(move: str, game_key: str,
 
 
 # ── GUI prompt library ──────────────────────────────────────────────
-
-def load_prompts() -> tuple[list[dict], str | None]:
-    """Return (prompts_list, active_title) for the GUI prompt library."""
-    return ensure_prompts_file()
-
 
 def save_prompts(prompts: list[dict], active: str = None) -> None:
     """Save the GUI prompt library (prompts array + active title).

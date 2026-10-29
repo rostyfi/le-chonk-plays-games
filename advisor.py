@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Game Advisor — screenshot + AI advice.
+Le Chonk plays games — screenshot + AI advice.
 
 Usage:
     ./play.sh                          # Screenshot + best move advice

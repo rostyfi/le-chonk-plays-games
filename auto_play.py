@@ -25,11 +25,11 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from screenshot import take_screenshot, take_window_screenshot, X11WindowCapture, save_full_screenshot
+from screenshot import take_screenshot, take_window_screenshot, X11WindowCapture
 from mistral_client import ask_best_move_parsed, image_size
 from move_parser import Action, execute_actions
 from move_detector import detect_move, build_system_prompt, build_user_prompt
-from prompt_loader import get_prompt_by_title, get_behavior
+from prompt_loader import get_prompt_by_title
 from input_controller import X11Input
 
 
@@ -63,7 +63,7 @@ def play_one_move(
     move_number: int = 1,
     debug: bool = False,
     dry_run: bool = False,
-    reasoning: str = "none",
+    reasoning: str = "low",
 ) -> dict:
     """
     Two-step auto-play:
@@ -202,11 +202,6 @@ def play_one_move(
     if actions:
         if not dry_run and window_title:
             _raise_window(window_title)
-        if not dry_run:
-            try:
-                save_full_screenshot(prefix=f"pre_{game_key}")
-            except Exception as e:
-                print(f"  Warning: full-screen screenshot failed: {e}", file=sys.stderr)
         log = execute_actions(actions, dry_run=dry_run)
         if verbose:
             verb = "Dry run" if dry_run else "Executing"
@@ -291,10 +286,10 @@ def main():
     )
     parser.add_argument(
         '--reasoning', '-r',
-        choices=['none', 'max'],
-        default='none',
-        help='AI reasoning level for move advice: none (fast) or max (think) '
-             '(default: none)'
+        choices=['none', 'low', 'max'],
+        default='low',
+        help='AI reasoning level for move advice: none (fastest), low (default) '
+             'or max (think) (default: low)'
     )
 
     args = parser.parse_args()

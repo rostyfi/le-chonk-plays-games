@@ -136,7 +136,7 @@ def test_build_payload():
     check('top_p is 1', p.get('top_p') == 1, str(p.get('top_p')))
     check('temperature 0 (greedy)', p.get('temperature') == 0.0,
           str(p.get('temperature')))
-    check('reasoning_effort none (default)', p.get('reasoning_effort') == 'none',
+    check('reasoning_effort low (default)', p.get('reasoning_effort') == 'low',
           str(p.get('reasoning_effort')))
     check('model set', p.get('model') == md.MODEL, str(p.get('model')))
     check('messages passed through', p['messages'] is msgs)

@@ -11,10 +11,6 @@ from gi.repository import GLib
 import os
 import sys
 import tempfile
-import time
-
-# Pre-defined folder for full-screen screenshots taken before each move
-SCREENSHOT_DIR = os.path.expanduser("~/Pictures/le-chonk-screenshots")
 
 
 # ── Full-screen capture (xdg-desktop-portal) ───────────────────────
@@ -77,23 +73,6 @@ def take_screenshot(output_path: str = None) -> str:
         return output_path
 
     return src_path
-
-
-def save_full_screenshot(folder: str = None, prefix: str = "pre_move") -> str:
-    """
-    Take a full-screen screenshot and save it to the given folder.
-    Creates the folder if it doesn't exist.
-    Returns the file path.
-    """
-    if folder is None:
-        folder = SCREENSHOT_DIR
-    os.makedirs(folder, exist_ok=True)
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    filename = f"{prefix}_{timestamp}.png"
-    path = os.path.join(folder, filename)
-    take_screenshot(path)
-    print(f"  Full-screen screenshot saved: {path}", file=sys.stderr)
-    return path
 
 
 # ── Window-specific capture (X11 XGetImage via XWayland) ───────────
@@ -351,13 +330,6 @@ class X11WindowCapture:
 
         self._xlib.XDestroyImage(image_ptr)
         return output_path
-
-    def capture_by_title(self, title_substring: str, output_path: str) -> str:
-        """Find a window by title and capture it."""
-        win = self.find_window(title_substring)
-        if not win:
-            raise RuntimeError(f"No window found matching '{title_substring}'")
-        return self.capture_window(win['id'], output_path)
 
     def close(self):
         if self._display:

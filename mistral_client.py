@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Minimal Mistral API client — sends a screenshot, gets move advice.
-Model: mistral-large-4, temperature: 0, reasoning_effort: none.
+Model: mistral-large-4, temperature: 0, reasoning_effort: low.
 
 All prompts are loaded from prompts.json via prompt_loader — no prompt
 text is hardcoded here.
@@ -16,13 +16,7 @@ import urllib.error
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from move_parser import extract_move_text
-from prompt_loader import (
-    get_advice_suffix,
-    load_prompts, save_prompts, ensure_prompts_file,
-)
-
-# Re-export for backward compatibility (gui.py imports these from here)
-PROMPTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts.json")
+from prompt_loader import get_advice_suffix
 
 MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
 MODEL = "mistral-large-4"
@@ -67,11 +61,11 @@ def image_size(image_path: str) -> tuple[int | None, int | None]:
 
 
 def _call_api(api_key: str, image_path: str, user_prompt: str, model: str,
-              reasoning: str = "none") -> str:
+              reasoning: str = "low") -> str:
     """Send image + prompt to Mistral API. Returns response text.
 
-    reasoning: "none" (fast, no chain-of-thought) or "max" (extended
-    reasoning, higher token budget).
+    reasoning: "low" (default, light chain-of-thought), "none" (fastest),
+    or "max" (extended reasoning, higher token budget).
     """
     image_b64, mime_type = encode_image(image_path)
 
@@ -99,7 +93,7 @@ def _call_api(api_key: str, image_path: str, user_prompt: str, model: str,
         "max_tokens": 32768 if is_max else 4096,
         "temperature": 0,
         "top_p": 1,
-        "reasoning_effort": "high" if is_max else "none",
+        "reasoning_effort": "high" if is_max else reasoning,
     }
 
     req = urllib.request.Request(
@@ -168,13 +162,14 @@ def ask_best_move(
     image_path: str,
     prompt: str,
     history: list[str] = None,
-    reasoning: str = "none",
+    reasoning: str = "low",
 ) -> str:
     """
     Send a screenshot to Mistral Large 4 and get the best move advice.
 
     prompt: the advice prompt text (from the prompt library in prompts.json).
-    reasoning: "none" (fast) or "max" (extended chain-of-thought).
+    reasoning: "low" (default, light chain-of-thought), "none" (fast),
+    or "max" (extended chain-of-thought).
     """
     text = prompt + get_advice_suffix()
     if history:
@@ -190,7 +185,7 @@ def ask_best_move_parsed(
     prompt: str,
     behavior: dict = None,
     history: list[str] = None,
-    reasoning: str = "none",
+    reasoning: str = "low",
 ) -> tuple[str, str]:
     """
     Ask Mistral for the best move and extract the move text from the response.
@@ -201,7 +196,8 @@ def ask_best_move_parsed(
     prompt:   the advice prompt text (from the prompt library).
     behavior: behaviour config dict (from the prompt's 'behavior' field).
               Controls how the move text is extracted (e.g. algebraic notation).
-    reasoning: "none" (fast) or "max" (extended chain-of-thought).
+    reasoning: "low" (default, light chain-of-thought), "none" (fast),
+    or "max" (extended chain-of-thought).
 
     Returns (raw_response, move_text). move_text is empty string if no move
     could be extracted.
@@ -213,11 +209,6 @@ def ask_best_move_parsed(
     )
     move_text = extract_move_text(response, behavior=behavior)
     return response, move_text
-
-
-# ── Prompt library re-exports (from prompt_loader) ─────────────────
-# load_prompts, save_prompts, ensure_prompts_file
-# are imported from prompt_loader at the top of this file.
 
 
 if __name__ == '__main__':

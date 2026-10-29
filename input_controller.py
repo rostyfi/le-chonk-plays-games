@@ -335,27 +335,6 @@ class X11Input:
         self.close()
 
 
-# High-level action helpers
-
-def click_at(x: int, y: int, double: bool = False):
-    """Quick click at screen coordinates."""
-    with X11Input() as inp:
-        inp.click(x, y, double=double)
-
-
-def drag_from_to(start_x: int, start_y: int, end_x: int, end_y: int,
-                 duration: float = 0.5):
-    """Quick drag between two screen coordinates."""
-    with X11Input() as inp:
-        inp.drag(start_x, start_y, end_x, end_y, duration=duration)
-
-
-def move_mouse(x: int, y: int):
-    """Quick mouse move."""
-    with X11Input() as inp:
-        inp.move(x, y)
-
-
 if __name__ == '__main__':
     # Self-test: move mouse in a small square pattern
     import sys

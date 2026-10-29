@@ -1,5 +1,5 @@
 #!/bin/bash
-# Card Game Advisor - Quick launcher
+# Le Chonk plays games - Quick launcher
 #
 # Usage:
 #   ./play.sh                  # Screenshot + AI advice (terminal)

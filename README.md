@@ -1,4 +1,4 @@
-# Card Game Advisor + Auto-Play
+# Le Chonk plays games
 
 AI-powered assistant for ANY card game. Takes a screenshot, sends it to
 **Mistral Large 4** (`mistral-large-4`), identifies the game, analyzes

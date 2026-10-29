@@ -196,12 +196,12 @@ def _msg_user_image(text: str, image_b64: str, mime_type: str) -> dict:
 
 
 def _build_payload(messages: list, model: str, temperature: float,
-                   reasoning_effort: str = "none") -> dict:
+                   reasoning_effort: str = "low") -> dict:
     """Build the chat-completions request payload.
 
     temperature defaults to 0 (greedy sampling); the Mistral API rejects
     greedy sampling unless top_p is 1, so top_p is always set to 1.
-    reasoning_effort defaults to "none" (no chain-of-thought), matching the
+    reasoning_effort defaults to "low" (light chain-of-thought), matching the
     deterministic, token-light behaviour used elsewhere in this project.
     """
     return {
@@ -216,7 +216,7 @@ def _build_payload(messages: list, model: str, temperature: float,
 
 def _chat_completion(api_key: str, messages: list, model: str,
                      temperature: float = 0.0,
-                     reasoning_effort: str = "none", timeout: int = 600) -> str:
+                     reasoning_effort: str = "low", timeout: int = 600) -> str:
     """Send a messages list to the Mistral endpoint. Returns the reply text.
 
     The image (if any) must already be embedded in a user message via
@@ -686,7 +686,7 @@ def detect_move(api_key: str, image_path: str, move: str,
                 game_key: str = "default", behavior: Optional[dict] = None,
                 model: str = MODEL,
                 temperature: float = 0.0,
-                reasoning_effort: str = "none",
+                reasoning_effort: str = "low",
                 overlay_path: Optional[str] = None) -> DetectedMove:
     """
     Detect a move on a screenshot using the Mistral endpoint.
@@ -707,7 +707,7 @@ def detect_move(api_key: str, image_path: str, move: str,
                        right_click_word — word in move text that means right-click
     model:           Mistral model (default mistral-large-4).
     temperature:     sampling temperature (default 0 = greedy).
-    reasoning_effort: Mistral reasoning level — "none" (default), "low",
+    reasoning_effort: Mistral reasoning level — "low" (default), "none",
                      "medium", or "high".
     overlay_path:    if given, draw the detected move on the picture and save it.
 
@@ -785,7 +785,7 @@ def detect_and_draw(api_key: str, image_path: str, move: str,
                     out_path: str, game_key: str = "default",
                     behavior: Optional[dict] = None, model: str = MODEL,
                     temperature: float = 0.0,
-                    reasoning_effort: str = "none") -> tuple[DetectedMove, str]:
+                    reasoning_effort: str = "low") -> tuple[DetectedMove, str]:
     """
     Detect a move and draw it on the picture in one call.
     Returns (DetectedMove, out_path).
