@@ -54,8 +54,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Optional
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from prompt_loader import get_detector_system, build_detector_user_prompt
+from .prompt_loader import get_detector_system, build_detector_user_prompt
 
 MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
 MODEL = "mistral-large-4"

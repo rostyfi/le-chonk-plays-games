@@ -13,17 +13,9 @@ import os
 
 # X11 constants
 Button1 = 1  # Left click
-Button2 = 2  # Middle click
 Button3 = 3  # Right click
 Button4 = 4  # Scroll up
 Button5 = 5  # Scroll down
-
-# XTest event types
-MotionNotify = 6
-ButtonPress = 4
-ButtonRelease = 5
-KeyPress = 2
-KeyRelease = 3
 
 
 class X11Input:
@@ -337,7 +329,6 @@ class X11Input:
 
 if __name__ == '__main__':
     # Self-test: move mouse in a small square pattern
-    import sys
     print(f"Screen: {X11Input().screen_width}x{X11Input().screen_height}")
     print("Testing mouse movement (watch your cursor)...")
     with X11Input() as inp:

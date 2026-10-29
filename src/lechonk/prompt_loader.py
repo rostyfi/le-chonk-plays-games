@@ -2,8 +2,13 @@
 """
 Prompt loader — single source of truth for all LLM prompts.
 
-All prompts live in prompts.json. This module loads them and provides
-typed getters so that callers never hardcode prompt text or game names.
+All prompts live in prompts.json, resolved at import time (see
+_resolve_prompts_file): $LECHONK_PROMPTS_FILE, then assets/prompts.json
+at the repo root (source checkout), then prompts.json next to this
+module (pip install). The GUI prompt editor saves back to the same
+resolved file, so edits are persisted wherever the app reads from.
+This module loads the file and provides typed getters so that callers
+never hardcode prompt text or game names.
 
 JSON structure:
     {
@@ -43,7 +48,31 @@ system prompts contain literal JSON curly braces like {"box_2d": ...}.
 import json
 import os
 
-PROMPTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts.json")
+_MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+_REPO_ASSETS_FILE = os.path.normpath(
+    os.path.join(_MODULE_DIR, "..", "..", "assets", "prompts.json"))
+_MODULE_FILE = os.path.join(_MODULE_DIR, "prompts.json")
+
+
+def _resolve_prompts_file() -> str:
+    """Locate prompts.json.
+
+    Priority:
+      1. $LECHONK_PROMPTS_FILE — explicit override.
+      2. assets/prompts.json at the repo root — source checkout.
+      3. prompts.json next to this module — pip-installed copy.
+    If none exists yet, the module copy is used (created on first run
+    by ensure_prompts_file).
+    """
+    env = os.environ.get("LECHONK_PROMPTS_FILE")
+    if env:
+        return env
+    if os.path.exists(_REPO_ASSETS_FILE):
+        return _REPO_ASSETS_FILE
+    return _MODULE_FILE
+
+
+PROMPTS_FILE = _resolve_prompts_file()
 
 
 # ── Fallback defaults (only used if prompts.json is missing/corrupt) ──

@@ -17,12 +17,12 @@ Run:   python3 test_move_detector.py
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src'))
 
-import move_detector as md
+from lechonk import move_detector as md
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PHOTO = os.environ.get('CHESS_PHOTO', os.path.join(HERE, 'chess_start_large.png'))
+PHOTO = os.environ.get('CHESS_PHOTO', os.path.join(HERE, '..', 'assets', 'chess_start_large.png'))
 
 # Behaviour config matching the "chess" prompt in prompts.json — used by
 # tests that exercise grid detection and move validation.

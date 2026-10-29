@@ -15,13 +15,10 @@ Parses structured commands like:
 import copy
 import re
 import time
-import sys
-import os
 from dataclasses import dataclass
 from typing import Optional
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from input_controller import X11Input
+from .input_controller import X11Input
 
 
 @dataclass
@@ -383,7 +380,7 @@ def execute_actions(actions: list[Action], dry_run: bool = False,
                 inp.click(action.x1, action.y1)
 
             elif action.type == 'right_click':
-                from input_controller import Button3
+                from .input_controller import Button3
                 inp.click(action.x1, action.y1, button=Button3)
 
             elif action.type == 'double_click':

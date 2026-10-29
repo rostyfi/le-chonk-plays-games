@@ -14,16 +14,54 @@ the board, and can:
 Works with: Solitaire (Klondike, Spider, FreeCell), Poker, Blackjack, Hearts,
 Spades, Bridge, Uno, MTG Arena, Balatro, Slay the Spire, and more.
 
+## Repository layout
+
+```
+├── .gitignore
+├── play.sh                  # launcher: routes to --gui / --auto / advice mode
+├── pyproject.toml           # package metadata + console entry points
+├── LICENSE                  # MIT (c) rostyfi
+├── README.md                # this file
+├── src/lechonk/             # the application package
+│   ├── __init__.py
+│   ├── advisor.py           # terminal advice mode
+│   ├── auto_play.py         # terminal auto-play mode
+│   ├── gui.py               # GTK desktop app
+│   ├── screenshot.py        # screen/window capture (portal + X11)
+│   ├── mistral_client.py    # Mistral API client (vision)
+│   ├── move_detector.py     # resolves a move to pixel coordinates on a screenshot
+│   ├── move_parser.py       # parses AI responses into executable actions
+│   ├── input_controller.py  # mouse/keyboard injection via X11 XTest
+│   ├── overlay.py           # draws planned moves on screenshots
+│   └── prompt_loader.py     # prompts.json loading/saving
+├── tests/                   # test_move_detector.py (offline + live), test_chess_photo.py, test_simple.py
+└── assets/                  # prompts.json (editable prompt library), chess_start.png,
+                             # chess_start_large.png, Solitaire (example screenshots)
+```
+
 ## Setup
 
-1. **Get a Mistral API key**: https://console.mistral.ai/api-keys/
+1. **Clone the repo** and install the package (optional — `play.sh` works
+   from a plain checkout too):
+   ```bash
+   git clone <repo-url> && cd le-chonk-plays-cards
+   pip install .            # or: pip install -e .
+   ```
 
-2. **Set your API key**:
+2. **Install system dependencies** (not pip-installable):
+   ```bash
+   sudo apt install python3-dbus python3-gi libx11-6 libxtst6 xdg-desktop-portal
+   ```
+   Plus `Pillow` (installed automatically via pip).
+
+3. **Get a Mistral API key**: https://console.mistral.ai/api-keys/
+
+4. **Set your API key**:
    ```bash
    export MISTRAL_API_KEY="your-key-here"
    ```
 
-3. **Make the launcher executable**:
+5. **Make the launcher executable**:
    ```bash
    chmod +x play.sh
    ```
@@ -32,13 +70,14 @@ Spades, Bridge, Uno, MTG Arena, Balatro, Slay the Spire, and more.
 
 ### Desktop app (recommended — see everything in one window)
 ```bash
-./play.sh --gui
+./play.sh --gui            # or, after pip install: lechonk-gui
 ```
 A GTK window with:
 - Window selector + live screenshot preview
 - AI analysis (board state, recommended move, reasoning)
 - Prompt library: switch between saved prompts, edit them, save new ones
-  (stored in `prompts.json`)
+  (stored in `assets/prompts.json`; the app reads and writes that file, so
+  edits persist — override the location with `LECHONK_PROMPTS_FILE`)
 - Buttons: **Capture & Advise**, **Dry Run**, **Execute Move**,
   **Re-execute Last Move** (replays the last received move without a new
   screenshot or API call)
@@ -71,7 +110,7 @@ A GTK window with:
 ### Terminal — Advice mode
 ```bash
 ./play.sh                          # Screenshot + AI advice
-./play.sh --game "Balatro"         # Specify the game
+./play.sh --prompt "Chess (default)"   # Pick a game prompt by title
 ./play.sh --save                   # Save the screenshot
 ./play.sh --quiet                  # Minimal output
 ```
@@ -81,14 +120,21 @@ A GTK window with:
 ./play.sh --auto --dry-run         # SAFE: shows what AI would do, no clicks
 ./play.sh --auto                   # Takes screenshot, AI plays one move
 ./play.sh --auto --loop 10         # Play 10 moves in a row
-./play.sh --auto --game "Poker"    # Specify the game
+./play.sh --auto --prompt "Chess (default)"   # Pick a game prompt by title
 ./play.sh --auto --delay 2         # Wait 2s between moves (loop mode)
+./play.sh --auto --reasoning max   # AI reasoning level: none, low (default), max
 ```
 
 ### Analyze an existing image
 ```bash
-python3 advisor.py --image /path/to/screenshot.png
-python3 advisor.py --image shot.png --game "Poker" --prompt "Call or fold?"
+python3 -m lechonk.advisor --image /path/to/screenshot.png   # from a checkout
+lechonk-advise --image shot.png --prompt "Chess (default)"   # after pip install
+```
+
+### Run the tests
+```bash
+python3 tests/test_move_detector.py                 # offline tests (no API key needed)
+MISTRAL_API_KEY=sk-... python3 tests/test_move_detector.py   # also runs live API tests
 ```
 
 ## How it works
@@ -109,27 +155,14 @@ python3 advisor.py --image shot.png --game "Poker" --prompt "Call or fold?"
   well; complex UIs may need a custom prompt describing the game.
 - Stop any loop with **Ctrl+C** in terminal.
 
-## Files
-
-| File | Purpose |
-|---|---|
-| `play.sh` | Launcher — routes to `--gui`, `--auto`, or advice mode |
-| `gui.py` | Desktop app (GTK): window selector, prompt library, auto-move |
-| `advisor.py` | Terminal advice mode |
-| `auto_play.py` | Terminal auto-play mode |
-| `screenshot.py` | Screenshot capture via xdg-desktop-portal |
-| `mistral_client.py` | Mistral API client (vision models) + prompt library |
-| `move_parser.py` | Parses AI response into executable actions |
-| `move_detector.py` | Detects a game move on a board image via the Mistral endpoint (cookbook `box_2d` format), resolves it to from/to squares + pixel boxes, and can draw the move (source/dest boxes + drag arrow) on the picture |
-| `test_move_detector.py` | Tests for `move_detector` (offline parser + stubbed end-to-end; live API test when `MISTRAL_API_KEY` is set) |
-| `input_controller.py` | Mouse/keyboard injection via X11 XTest (ctypes) |
-| `prompts.json` | Saved prompt library (titles + texts) |
-| `chess_start.png` | Test fixture — real chess screenshot (Stockfish, start position) |
-| `test_chess_photo.py` | Live Mistral API test — sends the photo to the API (chess prompt, actions format) and prints the raw reply; needs `MISTRAL_API_KEY` |
-
 ## Requirements
 
 - Ubuntu (or any Linux with Wayland + XWayland + xdg-desktop-portal)
-- Python 3 with `dbus-python` and `PyGObject`
+- Python 3.10+ with `dbus-python` and `PyGObject` (system packages)
 - `libX11` and `libXtst` (already installed on any desktop Linux)
+- `Pillow` (pip)
 - Mistral API key
+
+## License
+
+MIT — see [LICENSE](LICENSE).

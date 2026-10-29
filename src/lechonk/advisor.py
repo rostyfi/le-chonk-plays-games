@@ -16,11 +16,9 @@ import sys
 import tempfile
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from screenshot import take_screenshot, take_window_screenshot
-from mistral_client import ask_best_move
-from prompt_loader import get_prompt_by_title, get_active_prompt
+from .screenshot import take_screenshot, take_window_screenshot
+from .mistral_client import ask_best_move
+from .prompt_loader import get_prompt_by_title, get_active_prompt
 
 
 def main():

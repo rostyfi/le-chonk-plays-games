@@ -23,16 +23,14 @@ gi.require_version('Gdk', '4.0')
 gi.require_version('GdkPixbuf', '2.0')
 from gi.repository import Gtk, Gdk, GdkPixbuf, GLib, Gio
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from screenshot import X11WindowCapture
-from mistral_client import ask_best_move_parsed
-from prompt_loader import ensure_prompts_file, save_prompts
-from move_parser import (Action, execute_actions, offset_actions,
+from .screenshot import X11WindowCapture
+from .mistral_client import ask_best_move_parsed
+from .prompt_loader import ensure_prompts_file, save_prompts
+from .move_parser import (Action, execute_actions, offset_actions,
                         extract_boxes, drag_to_clicks)
-from move_detector import detect_move, build_system_prompt, build_user_prompt
-from overlay import draw_move_overlay, move_changed_board
-from input_controller import X11Input
+from .move_detector import detect_move, build_system_prompt, build_user_prompt
+from .overlay import draw_move_overlay, move_changed_board
+from .input_controller import X11Input
 
 
 class AdvisorWindow(Gtk.ApplicationWindow):

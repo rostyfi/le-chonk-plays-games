@@ -12,6 +12,9 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Make the lechonk package importable when running from a source checkout
+export PYTHONPATH="$SCRIPT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
+
 # Check for API key (skip for --help)
 if [[ "$1" != "--help" && "$1" != "-h" && -z "$MISTRAL_API_KEY" ]]; then
     echo "Error: MISTRAL_API_KEY not set."
@@ -20,13 +23,13 @@ if [[ "$1" != "--help" && "$1" != "-h" && -z "$MISTRAL_API_KEY" ]]; then
     exit 1
 fi
 
-# Route to the right script
+# Route to the right entry point
 if [[ "$1" == "--gui" ]]; then
     shift
-    python3 "$SCRIPT_DIR/gui.py" "$@"
+    python3 -m lechonk.gui "$@"
 elif [[ "$1" == "--auto" ]]; then
     shift
-    python3 "$SCRIPT_DIR/auto_play.py" "$@"
+    python3 -m lechonk.auto_play "$@"
 else
-    python3 "$SCRIPT_DIR/advisor.py" "$@"
+    python3 -m lechonk.advisor "$@"
 fi

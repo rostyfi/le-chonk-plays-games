@@ -15,18 +15,18 @@ import os
 import sys
 import tempfile
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src'))
 
 from PIL import Image
 
-from move_parser import Action
-from move_detector import detect_move
-from mistral_client import ask_best_move_parsed
-from prompt_loader import get_prompt_by_title
-from overlay import MOVE_COLOR, draw_move_overlay
+from lechonk.move_parser import Action
+from lechonk.move_detector import detect_move
+from lechonk.mistral_client import ask_best_move_parsed
+from lechonk.prompt_loader import get_prompt_by_title
+from lechonk.overlay import MOVE_COLOR, draw_move_overlay
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PHOTO = os.environ.get('CHESS_PHOTO', os.path.join(HERE, 'chess_start_large.png'))
+PHOTO = os.environ.get('CHESS_PHOTO', os.path.join(HERE, '..', 'assets', 'chess_start_large.png'))
 
 # Load the chess prompt config from prompts.json
 _prompt_cfg = get_prompt_by_title('Chess (default)')

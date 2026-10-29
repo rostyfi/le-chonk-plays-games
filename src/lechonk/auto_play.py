@@ -23,14 +23,11 @@ import sys
 import time
 import tempfile
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from screenshot import take_screenshot, take_window_screenshot, X11WindowCapture
-from mistral_client import ask_best_move_parsed, image_size
-from move_parser import Action, execute_actions
-from move_detector import detect_move, build_system_prompt, build_user_prompt
-from prompt_loader import get_prompt_by_title
-from input_controller import X11Input
+from .screenshot import take_screenshot, take_window_screenshot, X11WindowCapture
+from .mistral_client import ask_best_move_parsed, image_size
+from .move_parser import Action, execute_actions
+from .move_detector import detect_move, build_system_prompt, build_user_prompt
+from .prompt_loader import get_prompt_by_title
 
 
 def _window_offset(window_title: str) -> tuple[int, int]:

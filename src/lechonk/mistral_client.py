@@ -14,9 +14,8 @@ import sys
 import urllib.request
 import urllib.error
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from move_parser import extract_move_text
-from prompt_loader import get_advice_suffix
+from .move_parser import extract_move_text
+from .prompt_loader import get_advice_suffix
 
 MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
 MODEL = "mistral-large-4"

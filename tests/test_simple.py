@@ -11,8 +11,8 @@ import sys
 import urllib.request
 import urllib.error
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from screenshot import take_screenshot
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src'))
+from lechonk.screenshot import take_screenshot
 
 API_URL = "https://api.mistral.ai/v1/chat/completions"
 MODEL = "mistral-large-4"
