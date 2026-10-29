@@ -11,33 +11,7 @@ the board, and can:
 - **Manage prompts** — a library of titled, saved prompts (`prompts.json`)
   you can switch between and edit in the desktop app
 
-Works with: Solitaire (Klondike, Spider, FreeCell), Poker, Blackjack, Hearts,
-Spades, Bridge, Uno, MTG Arena, Balatro, Slay the Spire, and more.
-
-## Repository layout
-
-```
-├── .gitignore
-├── play.sh                  # launcher: routes to --gui / --auto / advice mode
-├── pyproject.toml           # package metadata + console entry points
-├── LICENSE                  # MIT (c) rostyfi
-├── README.md                # this file
-├── src/lechonk/             # the application package
-│   ├── __init__.py
-│   ├── advisor.py           # terminal advice mode
-│   ├── auto_play.py         # terminal auto-play mode
-│   ├── gui.py               # GTK desktop app
-│   ├── screenshot.py        # screen/window capture (portal + X11)
-│   ├── mistral_client.py    # Mistral API client (vision)
-│   ├── move_detector.py     # resolves a move to pixel coordinates on a screenshot
-│   ├── move_parser.py       # parses AI responses into executable actions
-│   ├── input_controller.py  # mouse/keyboard injection via X11 XTest
-│   ├── overlay.py           # draws planned moves on screenshots
-│   └── prompt_loader.py     # prompts.json loading/saving
-├── tests/                   # test_move_detector.py (offline + live), test_chess_photo.py, test_simple.py
-└── assets/                  # prompts.json (editable prompt library), chess_start.png,
-                             # chess_start_large.png, Solitaire (example screenshots)
-```
+Works with: Solitaire, Chess, Checkers and Minesweeper and possibly many other similar games.
 
 ## Setup
 
@@ -140,11 +114,11 @@ MISTRAL_API_KEY=sk-... python3 tests/test_move_detector.py   # also runs live AP
 ## How it works
 
 ```
-┌──────────────┐     ┌──────────────────┐     ┌─────────────────────┐
-│  Screenshot   │────▶│  Mistral Large 4  │────▶│  Parse + Execute     │
-│  (Wayland     │     │  (mistral-large-4)│     │  (X11 XTest input)   │
-│   portal)     │     │   latest)         │     │                      │
-└──────────────┘     └──────────────────┘     └─────────────────────┘
+┌──────────────┐     ┌───────────────────┐     ┌─────────────────────┐
+│  Screenshot  │────▶│  Mistral Large 4  │────▶│  Parse + Execute    │
+│  (Wayland    │     │  (mistral-large-4)│     │  (X11 XTest input)  │
+│   portal)    │     │   latest)         │     │                     │
+└──────────────┘     └───────────────────┘     └─────────────────────┘
 ```
 
 ## Safety
