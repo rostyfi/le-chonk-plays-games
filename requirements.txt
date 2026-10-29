@@ -1,0 +1,4 @@
+# Pip-installable dependencies.
+# System packages (not pip-installable, see README) must also be installed:
+#   sudo apt install python3-dbus python3-gi libx11-6 libxtst6 xdg-desktop-portal
+Pillow>=10.0

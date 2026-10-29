@@ -20,13 +20,15 @@ Works with: Solitaire, Chess, Checkers and Minesweeper and possibly many other s
    ```bash
    git clone <repo-url> && cd le-chonk-plays-cards
    pip install .            # or: pip install -e .
+   # or install just the pip dependencies without packaging:
+   pip install -r requirements.txt
    ```
 
 2. **Install system dependencies** (not pip-installable):
    ```bash
    sudo apt install python3-dbus python3-gi libx11-6 libxtst6 xdg-desktop-portal
    ```
-   Plus `Pillow` (installed automatically via pip).
+   Plus `Pillow` (installed automatically via `pip install .` or `requirements.txt`).
 
 3. **Get a Mistral API key**: https://console.mistral.ai/api-keys/
 
