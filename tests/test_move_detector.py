@@ -74,6 +74,40 @@ REPLY_PROSE_FALLBACK = 'I would move the pawn from e2 to e4. No boxes.'
 
 REPLY_NONE = 'I cannot locate that move on the board. BOXES: NONE\nSQUARES: NONE'
 
+# CENTERS-only reply (pixel endpoints; no box dicts) — the format the README
+# documents as primary.
+REPLY_CENTERS = """\
+The 9 of hearts moves from column 3 to column 5.
+CENTERS:
+source: (584, 562)
+dest: (584, 464)
+move: 9h column 3 -> column 5
+"""
+
+# CENTERS plus pixel-valued box dicts (model emitted pixels where normalized
+# 0-999 were expected) — CENTERS must win and the boxes must be dropped.
+REPLY_CENTERS_PIXEL_BOXES = """\
+CENTERS:
+source: (584, 562)
+dest: (584, 464)
+{"box_2d": [584, 562, 640, 620], "label": "source"}
+{"box_2d": [584, 464, 640, 522], "label": "destination"}
+"""
+
+# Pixel-valued boxes without CENTERS — must be interpreted as pixels.
+REPLY_PIXEL_BOXES_ONLY = (
+    '{"box_2d": [1200, 900, 1300, 1000], "label": "source"}\n'
+    '{"box_2d": [1200, 700, 1300, 800], "label": "destination"}\n'
+    'move: drag card up'
+)
+
+# Single-quoted pseudo-JSON dicts.
+REPLY_SINGLE_QUOTES = (
+    "{'box_2d': [421, 607, 458, 661], 'label': 'source'}\n"
+    "{'box_2d': [621, 496, 658, 550], 'label': 'destination'}\n"
+    'move: 7d column 3 -> column 5'
+)
+
 
 # ── offline tests ───────────────────────────────────────────────────────────
 
@@ -114,6 +148,73 @@ def test_extract_squares():
     check('prose fallback', md.extract_squares(REPLY_PROSE_FALLBACK) == ('e2', 'e4'),
           str(md.extract_squares(REPLY_PROSE_FALLBACK)))
     check('NONE -> None', md.extract_squares(REPLY_NONE) is None)
+
+
+def test_extract_centers():
+    print('[offline] extract_centers')
+    c = md.extract_centers(REPLY_CENTERS)
+    check('centers parsed', c == {'source': (584.0, 562.0), 'dest': (584.0, 464.0)},
+          str(c))
+    check('NONE -> None', md.extract_centers('CENTERS: NONE') is None)
+    check('no centers -> None', md.extract_centers(REPLY_E4) is None)
+    # BOXES: NONE with a degenerate CENTERS (0, 0) block -> no endpoints
+    det_none = md.parse_detection(
+        'BOXES: NONE\nCENTERS:\nsource: (0, 0)\ndest: (0, 0)',
+        'No moves available', 'solitaire', 1920, 1080, {'action': 'drag'})
+    check('BOXES: NONE -> no points', det_none.source_point is None and
+          det_none.dest_point is None,
+          f'{det_none.source_point} {det_none.dest_point}')
+
+
+def test_parse_detection_centers():
+    print('[offline] parse_detection CENTERS handling')
+    beh = {'action': 'drag', 'grab_y': 0.8}
+    # CENTERS only: pixel endpoints used exactly as written
+    det = md.parse_detection(REPLY_CENTERS, 'Move 9h col 3 -> col 5',
+                             'solitaire', 1000, 800, beh)
+    check('centers -> source_point', det.source_point == (584, 562),
+          str(det.source_point))
+    check('centers -> dest_point', det.dest_point == (584, 464),
+          str(det.dest_point))
+    check('no boxes from CENTERS-only', det.source_box is None and
+          det.dest_box is None)
+    # CENTERS + pixel-valued boxes: CENTERS win, boxes dropped
+    det2 = md.parse_detection(REPLY_CENTERS_PIXEL_BOXES, 'drag card up',
+                              'solitaire', 1000, 800, beh)
+    check('centers beat pixel boxes (source)', det2.source_point == (584, 562),
+          str(det2.source_point))
+    check('centers beat pixel boxes (dest)', det2.dest_point == (584, 464),
+          str(det2.dest_point))
+    check('pixel boxes dropped', det2.source_box is None and
+          det2.dest_box is None, f'{det2.source_box} {det2.dest_box}')
+    # pixel-valued boxes (> 999) without CENTERS: interpreted as pixels
+    det3 = md.parse_detection(REPLY_PIXEL_BOXES_ONLY, 'drag card up',
+                              'solitaire', 1920, 1080, beh)
+    check('pixel boxes as pixels (source)', det3.source_point == (1250, 950),
+          str(det3.source_point))
+    check('pixel boxes as pixels (dest)', det3.dest_point == (1250, 750),
+          str(det3.dest_point))
+    # single-quoted dicts still parse as normalized boxes
+    det4 = md.parse_detection(REPLY_SINGLE_QUOTES, 'Move 7d col 3 -> col 5',
+                              'solitaire', 1000, 800, beh)
+    check('single-quote source_point', det4.source_point == (440, 507),
+          str(det4.source_point))
+    check('single-quote dest_point', det4.dest_point == (640, 418),
+          str(det4.dest_point))
+
+
+def test_detect_move_centers_stub():
+    print('[offline] detect_move end-to-end with CENTERS reply (stubbed)')
+    orig = md._chat_completion
+    md._chat_completion = lambda *a, **k: REPLY_CENTERS
+    try:
+        det = md.detect_move('k', PHOTO, 'Move 9h col 3 -> col 5',
+                             game_key='solitaire',
+                             behavior={'action': 'drag', 'grab_y': 0.8})
+    finally:
+        md._chat_completion = orig
+    check('det source_point', det.source_point == (584, 562), str(det.source_point))
+    check('det dest_point', det.dest_point == (584, 464), str(det.dest_point))
 
 
 def test_box_center_px():
@@ -556,6 +657,9 @@ def main():
     test_extract_results()
     test_extract_boxes()
     test_extract_squares()
+    test_extract_centers()
+    test_parse_detection_centers()
+    test_detect_move_centers_stub()
     test_box_center_px()
     test_build_payload()
     test_build_user_prompt()

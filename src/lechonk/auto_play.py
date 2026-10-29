@@ -166,8 +166,7 @@ def play_one_move(
         # source box height (e.g. 0.8 = near the bottom of the card).
         grab_y = behavior.get("grab_y")
         if grab_y is not None and det.source_box:
-            from mistral_client import image_size as _img_size
-            _iw, _ih = _img_size(image_path)
+            _iw, _ih = image_size(image_path)
             if _ih:
                 box_top = det.source_box[1] / 1000 * _ih
                 box_h = (det.source_box[3] - det.source_box[1]) / 1000 * _ih

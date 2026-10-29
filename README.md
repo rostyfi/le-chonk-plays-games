@@ -18,7 +18,7 @@ Works with: Solitaire, Chess, Checkers and Minesweeper and possibly many other s
 1. **Clone the repo** and install the package (optional — `play.sh` works
    from a plain checkout too):
    ```bash
-   git clone <repo-url> && cd le-chonk-plays-cards
+   git clone <repo-url> && cd le-chonk-plays-games
    pip install .            # or: pip install -e .
    # or install just the pip dependencies without packaging:
    pip install -r requirements.txt

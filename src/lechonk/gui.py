@@ -637,7 +637,7 @@ class AdvisorWindow(Gtk.ApplicationWindow):
                 detection = det.describe()
 
                 # Build a debug view of what was sent to move_detector
-                from mistral_client import image_size as _img_size
+                from .mistral_client import image_size as _img_size
                 iw, ih = _img_size(tmp_path)
                 sys_prompt = build_system_prompt(game_key)
                 user_prompt = build_user_prompt(move_text, game_key, iw, ih)

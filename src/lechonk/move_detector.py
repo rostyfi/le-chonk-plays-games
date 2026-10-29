@@ -54,7 +54,11 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Optional
 
-from .prompt_loader import get_detector_system, build_detector_user_prompt
+try:
+    from .prompt_loader import get_detector_system, build_detector_user_prompt
+except ImportError:  # run directly as a script: python3 move_detector.py ...
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from lechonk.prompt_loader import get_detector_system, build_detector_user_prompt
 
 MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
 MODEL = "mistral-large-4"
@@ -265,7 +269,11 @@ def extract_results(text_content: str) -> list[dict]:
         try:
             results.append(json.loads(chunk))
         except json.JSONDecodeError:
-            continue
+            # models sometimes emit single-quoted pseudo-JSON
+            try:
+                results.append(json.loads(chunk.replace("'", '"')))
+            except json.JSONDecodeError:
+                continue
     return results
 
 
@@ -289,6 +297,38 @@ def extract_boxes(text_content: str) -> Optional[dict]:
             boxes['dest'] = coords
     if 'source' in boxes and 'dest' in boxes:
         return boxes
+    return None
+
+
+# CENTERS block: the drag endpoints as explicit pixel centers, e.g.
+#   CENTERS:
+#   source: (584, 562)
+#   dest: (584, 464)
+# When present, these pixel endpoints are used exactly as written.
+CENTER_LINE = re.compile(
+    r'(source|dest(?:ination)?)\b[^:\n]{0,15}:\s*\(\s*(-?\d+(?:\.\d+)?)\s*[, ]\s*'
+    r'(-?\d+(?:\.\d+)?)\s*\)',
+    re.IGNORECASE
+)
+
+
+def extract_centers(text_content: str) -> Optional[dict]:
+    """Extract the CENTERS section: the move endpoints as pixel centers.
+
+    Returns {'source': (x, y), 'dest': (x, y)} (image pixels) or None.
+    """
+    if re.search(r'CENTERS\s*:\s*NONE', text_content, re.IGNORECASE):
+        return None
+    centers: dict = {}
+    for m in CENTER_LINE.finditer(text_content):
+        label = m.group(1).lower()
+        point = (float(m.group(2)), float(m.group(3)))
+        if label.startswith('source'):
+            centers['source'] = point
+        elif label.startswith('dest'):
+            centers['dest'] = point
+    if 'source' in centers and 'dest' in centers:
+        return centers
     return None
 
 
@@ -347,6 +387,11 @@ def parse_detection(raw: str, move: str, game_key: str,
                     behavior: Optional[dict] = None) -> DetectedMove:
     """Parse a model reply into a DetectedMove.
 
+    Endpoint pixels come from the CENTERS block when present (used exactly
+    as written); otherwise from the box_2d dictionaries (normalized 0-999,
+    centers computed in pixels). Boxes with any coordinate > 999 are treated
+    as pixel coordinates, not normalized ones.
+
     behavior: dict from the prompt's 'behavior' config. When
     behavior['move_format'] is 'algebraic' or 'squares', the reply is
     expected to contain from/to square lines; otherwise a natural-language
@@ -356,15 +401,61 @@ def parse_detection(raw: str, move: str, game_key: str,
     move_format = behavior.get("move_format")
     has_squares = move_format in ("algebraic", "squares")
     boxes = extract_boxes(raw)
+    centers = extract_centers(raw)
+    if re.search(r'(?:BOXES|CENTERS)\s*:\s*NONE', raw, re.IGNORECASE):
+        # the model explicitly could not locate the move — do not fabricate
+        # endpoints from a degenerate CENTERS block (e.g. source: (0, 0))
+        boxes = None
+        centers = None
     squares = extract_squares(raw) if has_squares else None
     description = None if has_squares else extract_description(raw)
     source_box = boxes['source'] if boxes else None
     dest_box = boxes['dest'] if boxes else None
+    if centers and 'source' in centers and 'dest' in centers and img_w and img_h:
+        # CENTERS are authoritative pixel endpoints; drop boxes that disagree
+        # with them (the model sometimes emits pixel coords as box_2d, which
+        # must not be drawn or scaled as normalized).
+        for name in ('source', 'dest'):
+            box = source_box if name == 'source' else dest_box
+            if box is None:
+                continue
+            cx = (box[0] + box[2]) / 2 / 1000 * img_w
+            cy = (box[1] + box[3]) / 2 / 1000 * img_h
+            px, py = centers[name]
+            if abs(cx - px) > 40 or abs(cy - py) > 40:
+                if name == 'source':
+                    source_box = None
+                else:
+                    dest_box = None
+    if (source_box and max(source_box) > 999) or (dest_box and max(dest_box) > 999):
+        # Coordinates beyond the 0-999 normalized range are pixels, not
+        # normalized values — interpret the boxes as pixel rectangles.
+        if not centers:
+            centers = {}
+        if source_box and 'source' not in centers:
+            centers['source'] = ((source_box[0] + source_box[2]) / 2,
+                                 (source_box[1] + source_box[3]) / 2)
+        if dest_box and 'dest' not in centers:
+            centers['dest'] = ((dest_box[0] + dest_box[2]) / 2,
+                               (dest_box[1] + dest_box[3]) / 2)
+        source_box = dest_box = None
     source_point = dest_point = None
-    if source_box and img_w and img_h:
-        source_point = _box_center_px(source_box, img_w, img_h)
-    if dest_box and img_w and img_h:
-        dest_point = _box_center_px(dest_box, img_w, img_h)
+    if centers and 'source' in centers and 'dest' in centers:
+        # explicit pixel centers — used exactly as written (clamped to image)
+        sx, sy = centers['source']
+        dx, dy = centers['dest']
+        if img_w and img_h:
+            sx = min(max(sx, 0), img_w - 1)
+            sy = min(max(sy, 0), img_h - 1)
+            dx = min(max(dx, 0), img_w - 1)
+            dy = min(max(dy, 0), img_h - 1)
+        source_point = (round(sx), round(sy))
+        dest_point = (round(dx), round(dy))
+    else:
+        if source_box and img_w and img_h:
+            source_point = _box_center_px(source_box, img_w, img_h)
+        if dest_box and img_w and img_h:
+            dest_point = _box_center_px(dest_box, img_w, img_h)
     return DetectedMove(
         move=move,
         game_key=game_key,
